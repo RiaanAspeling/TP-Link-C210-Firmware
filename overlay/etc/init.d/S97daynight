@@ -1,0 +1,14 @@
+#!/bin/sh
+DAEMON=/usr/sbin/daynight
+PIDFILE=/run/daynight.pid
+kill_ric() { i=0; while [ $i -lt 5 ]; do pkill -f /usr/bin/ric 2>/dev/null; sleep 1; pgrep -f /usr/bin/ric >/dev/null || break; i=$((i+1)); done; }
+start() {
+	echo -c 15 "Starting day/night controller"
+	kill_ric &                       # ric can't drive the TMI8150 SPI IR-cut; keep it down
+	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON"
+}
+stop() { start-stop-daemon -K -p "$PIDFILE" -x "$DAEMON" 2>/dev/null; rm -f "$PIDFILE"; }
+case "$1" in
+	start) start ;; stop) stop ;; restart) stop; sleep 1; start ;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

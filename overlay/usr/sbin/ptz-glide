@@ -1,0 +1,86 @@
+#!/bin/sh
+# ptz-glide - smooth continuous PTZ for ONVIF clients (Tapo C210).
+#
+# The patched ONVIF ptz_service records the latest PTZ intent in $STATE as:
+#       "SX SY EVENT TS"
+#   SX,SY  direction in {-1,0,1}   EVENT  1=ContinuousMove 0=Stop
+#   TS     /proc/uptime seconds when the request arrived
+#
+# Smooth motion comes from the motor's OWN profiled seek (motors -d h), which
+# accelerates, cruises and decelerates in one continuous move - exactly what the
+# stock firmware used. Issuing many small relative steps instead (motors -d g)
+# is fork-rate limited on this SoC (~3/sec) and looks jerky, so this daemon acts
+# only on STATE CHANGES: it starts a single seek toward the travel limit in the
+# requested direction when a hold begins (or the direction changes), and issues
+# a single stop (motors -d s) when the hold ends. Between changes the motor
+# glides on its own, independent of this loop's rate. Few, absolute commands
+# also keep the open-loop position counter accurate.
+#
+# Two client styles both work via a long ContinuousMove freshness window (a
+# crash/disconnect safety cap) and a short Stop grace:
+#   - Pulse clients (IP Cam Viewer) spam ContinuousMove+Stop ~3/sec while held:
+#     the grace bridges each gap so the single seek keeps running; the final
+#     release-Stop lets the window lapse and the daemon stops the motor.
+#   - Single-hold clients (iSpy/AgentDVR): one ContinuousMove covers the hold,
+#     the release Stop ends it.
+#
+# Tunables (env or /etc/default/ptz-glide, live-editable - no rebuild):
+#   CM_WINDOW  ContinuousMove freshness (s, crash cap)   GRACE  Stop grace (s)
+#   POLL       loop/release-detection interval (s)
+#   MAXX/MAXY  travel limits (steps); default from thingino.json motors.steps_*
+# Seek speed is the motor's own (raptor/motor config), so it matches the WebUI.
+
+STATE=/tmp/ptz_glide
+CFG=/etc/thingino.json
+[ -f /etc/default/ptz-glide ] && . /etc/default/ptz-glide
+CM_WINDOW="${PTZ_GLIDE_CM_WINDOW:-30}"
+GRACE="${PTZ_GLIDE_GRACE:-0.30}"
+POLL="${PTZ_GLIDE_POLL:-0.08}"
+MAXX="${PTZ_GLIDE_MAXX:-$(jct "$CFG" get motors.steps_pan 2>/dev/null)}";  MAXX="${MAXX:-7850}"
+MAXY="${PTZ_GLIDE_MAXY:-$(jct "$CFG" get motors.steps_tilt 2>/dev/null)}"; MAXY="${MAXY:-2730}"
+# relative glide distance per gesture: a bit over full travel so one move always
+# reaches the physical limit from anywhere; the motor clamps there.
+RSTEP_X="${PTZ_GLIDE_RSTEP_X:-$((MAXX + MAXX/10))}"
+RSTEP_Y="${PTZ_GLIDE_RSTEP_Y:-$((MAXY + MAXY/10))}"
+
+printf '0 0 0 0\n' > "$STATE"
+cx=0; cy=0   # current commanded motion direction
+
+while true; do
+	read sx sy event ts 2>/dev/null < "$STATE"
+	sx="${sx:-0}"; sy="${sy:-0}"; event="${event:-0}"; ts="${ts:-0}"
+
+	# fresh + directional?
+	[ "$event" = "1" ] && win="$CM_WINDOW" || win="$GRACE"
+	if { [ "$sx" != "0" ] || [ "$sy" != "0" ]; } && \
+	   awk -v n="$(cut -d' ' -f1 /proc/uptime)" -v t="$ts" -v w="$win" 'BEGIN{exit !((n-t)<w)}'; then
+		dx="$sx"; dy="$sy"
+	else
+		dx=0; dy=0
+	fi
+
+	# act only when the desired motion changes
+	if [ "$dx" != "$cx" ] || [ "$dy" != "$cy" ]; then
+		# Stop, then WAIT for the motor to fully settle before issuing the next
+		# seek. Interrupting an in-progress seek and immediately re-seeking the
+		# opposite way corrupts this motor's open-loop position counter (reversal
+		# then sticks). Letting it come to rest first keeps the counter sane.
+		motors -d s >/dev/null 2>&1
+		if [ "$cx" != "0" ] || [ "$cy" != "0" ]; then
+			i=0
+			while [ "$(motors -b)" = "1" ] && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i+1)); done
+		fi
+		if [ "$dx" != "0" ] || [ "$dy" != "0" ]; then
+			# NOTE: do NOT call "motors -r" here - it performs a physical homing
+			# sequence, not a counter reset.
+			# ONE large RELATIVE move: the motor runs it as a single profiled move
+			# (smooth glide). Mirrors what the WebUI does and keeps working
+			# regardless of where the counter thinks we are
+			# (/var/www/x/json-motor.cgi: "motors -d g -x $x -y $y"). Always pass
+			# BOTH axes, like the WebUI, holding the idle one at 0.
+			motors -d g -x "$((dx * RSTEP_X))" -y "$((dy * RSTEP_Y))" >/dev/null 2>&1
+		fi
+		cx="$dx"; cy="$dy"
+	fi
+	sleep "$POLL"
+done

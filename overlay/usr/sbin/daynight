@@ -1,0 +1,47 @@
+#!/bin/sh
+# daynight - IR-cut + IR-LED day/night controller for the Tapo C210
+# (TMI8150 SPI IR-cut chardev + GPIO IR-LED). Brightness = sensor analog gain
+# from the ISP, which rises as the scene gets darker.
+CFG=/etc/thingino.json
+ISP="${ISP:-/proc/jz/isp/isp-m0}"
+IRCUT="${IRCUT:-/dev/tmi8152_ir_cut}"
+IRLED="${IRLED:-49}"                      # ir850 LED gpio (active-low)
+GPIO="${GPIO:-gpio}"                       # gpio command (override in tests)
+jcfg(){ jct "$CFG" get "$1" 2>/dev/null; }
+# thresholds (thingino.json daynight.* overrides, else env, else default)
+NIGHT_GAIN="${NIGHT_GAIN:-$(jcfg daynight.night_gain)}"; NIGHT_GAIN="${NIGHT_GAIN:-150}"
+DAY_GAIN="${DAY_GAIN:-$(jcfg daynight.day_gain)}";       DAY_GAIN="${DAY_GAIN:-110}"
+POLL="${POLL:-$(jcfg daynight.poll)}";                   POLL="${POLL:-5}"
+NIGHT_DEBOUNCE="${NIGHT_DEBOUNCE:-6}"
+DAYCHECK_EVERY="${DAYCHECK_EVERY:-12}"
+
+gain(){ awk -F: '/^SENSOR analog gain/{gsub(/ /,"",$2);print $2;exit}' "$ISP" 2>/dev/null; }
+led_on(){  $GPIO set "$IRLED" 0 2>/dev/null; }   # active-low: 0 = on
+led_off(){ $GPIO set "$IRLED" 1 2>/dev/null; }   # 1 = off
+day_mode(){   printf 1 > "$IRCUT"; led_off; }    # filter IN  = day
+night_mode(){ printf 0 > "$IRCUT"; led_on;  }    # filter OUT + IR on = night
+
+pkill -f /usr/bin/ric 2>/dev/null                 # ric can't drive the SPI IR-cut; keep it down
+$GPIO output "$IRLED" 2>/dev/null
+day_mode                                          # boot default: DAY
+state=day; dark=0; cnt=0
+logger -t daynight "started NIGHT_GAIN=$NIGHT_GAIN DAY_GAIN=$DAY_GAIN POLL=$POLL" 2>/dev/null
+while true; do
+  g=$(gain); [ -z "$g" ] && g=0
+  if [ "$state" = day ]; then
+    if [ "$g" -ge "$NIGHT_GAIN" ]; then dark=$((dark+1)); else dark=0; fi
+    if [ "$dark" -ge "$NIGHT_DEBOUNCE" ]; then
+      state=night; dark=0; cnt=0; night_mode
+      logger -t daynight "-> NIGHT gain=$g" 2>/dev/null
+    fi
+  else
+    cnt=$((cnt+1))
+    if [ "$cnt" -ge "$DAYCHECK_EVERY" ]; then
+      cnt=0; led_off; sleep 3; gc=$(gain); [ -z "$gc" ] && gc=999
+      if [ "$gc" -le "$DAY_GAIN" ]; then
+        state=day; day_mode; logger -t daynight "-> DAY gain=$gc" 2>/dev/null
+      else led_on; fi
+    fi
+  fi
+  sleep "$POLL"
+done

@@ -1,0 +1,172 @@
+From: Tapo-C210 lean firmware
+Subject: [PATCH] ptz: continuous glide via ptz-glide daemon; safe limits
+
+--- a/src/ptz_service.c	2026-08-10 13:29:38.593847026 +0200
++++ b/src/ptz_service.c	2026-08-10 14:19:23.339413749 +0200
+@@ -36,6 +36,11 @@
+ extern service_context_t service_ctx;
+ presets_t presets;
+ 
++/* LEAN PATCH (Tapo C210): shared state file with the ptz-glide daemon.
++   Format "SX SY EVENT TS": direction in {-1,0,1}, EVENT 1=ContinuousMove
++   0=Stop, TS=/proc/uptime seconds. See /usr/sbin/ptz-glide. */
++#define PTZ_GLIDE_STATE "/tmp/ptz_glide"
++
+ int ptz_supports_zoom()
+ {
+     if (service_ctx.ptz_node.enable == 0) {
+@@ -1184,58 +1189,40 @@
+     if (y != NULL)
+         log_debug("PTZ: ContinuousMove Y velocity (normalized): %f", dy);
+ 
+-    // Check if we have diagonal movement (both X and Y non-zero) and move_both command is configured
+-    int has_diagonal = (x != NULL && dx != 0.0 && y != NULL && dy != 0.0);
+-    int use_both = has_diagonal && (service_ctx.ptz_node.move_both != NULL);
+-    int has_x_only = (x != NULL && dx != 0.0 && (y == NULL || dy == 0.0));
+-    int has_y_only = (y != NULL && dy != 0.0 && (x == NULL || dx == 0.0));
+-
+-    // Calculate target positions based on velocity direction
+-    double x_target = 0.0;
+-    double y_target = 0.0;
+-
+-    if (x != NULL && dx != 0.0) {
+-        if (dx > 0.0) {
+-            x_target = service_ctx.ptz_node.max_step_x;
+-        } else {
+-            x_target = service_ctx.ptz_node.min_step_x;
+-        }
+-    }
+ 
+-    if (y != NULL && dy != 0.0) {
+-        if (dy > 0.0) {
+-            y_target = service_ctx.ptz_node.max_step_y;
+-        } else {
+-            y_target = service_ctx.ptz_node.min_step_y;
+-        }
+-    }
+-
+-    // Execute movement commands based on what's needed
+-    if (use_both) {
+-        // Use single command for true diagonal movement
+-        sprintf(sys_command, service_ctx.ptz_node.move_both, x_target, y_target);
+-        log_debug("PTZ: Executing move_both command: %s", sys_command);
+-        system(sys_command);
+-        ret = 0;
+-    } else if (has_x_only) {
+-        // X movement only
+-        if (service_ctx.ptz_node.move_x == NULL) {
+-            send_action_failed_fault("ptz_service", -3);
+-            return -3;
+-        }
+-        sprintf(sys_command, service_ctx.ptz_node.move_x, x_target);
+-        log_debug("PTZ: Executing move_x command: %s", sys_command);
+-        system(sys_command);
+-        ret = 0;
+-    } else if (has_y_only) {
+-        // Y movement only
+-        if (service_ctx.ptz_node.move_y == NULL) {
+-            send_action_failed_fault("ptz_service", -4);
+-            return -4;
++    // LEAN PATCH (Tapo C210): hand pan/tilt off to the ptz-glide daemon.
++    //
++    // Upstream translated a velocity into a seek toward the hardware extreme
++    // (motors -d h) and relied on Stop (motors -d s) to halt. Clients that
++    // emulate press-and-hold with rapid ContinuousMove+Stop pulses (e.g. IP Cam
++    // Viewer, ~3/sec) break it: from rest the immediate Stop cancels the seek
++    // before the motor overcomes start-up latency (reverse off a limit never
++    // moves), and -d s racing an in-flight move corrupts the motor daemon's
++    // position tracking. Continuous glide needs the motor to keep moving BETWEEN
++    // pulses, which this stateless CGI cannot sustain on its own. So we only
++    // record the requested direction and a short freshness deadline; the
++    // ptz-glide daemon (sole motor-command writer, no -d s) issues small
++    // relative steps while the deadline is fresh -> smooth glide during a hold,
++    // coast-to-stop shortly after release, safe clamping/reversal at limits.
++    // Sign matches upstream's target choice (dx/dy > 0 -> toward max_step).
++    {
++        int sx = 0, sy = 0;
++        double up = 0.0;
++        FILE *uf, *sf;
++        if (x != NULL && dx != 0.0) sx = (dx > 0.0) ? 1 : -1;
++        if (y != NULL && dy != 0.0) sy = (dy > 0.0) ? 1 : -1;
++        uf = fopen("/proc/uptime", "r");
++        if (uf != NULL) {
++            if (fscanf(uf, "%lf", &up) != 1) up = 0.0;
++            fclose(uf);
++        }
++        sf = fopen(PTZ_GLIDE_STATE, "w");
++        if (sf != NULL) {
++            /* "SX SY EVENT TS": EVENT 1 = ContinuousMove */
++            fprintf(sf, "%d %d 1 %.2f\n", sx, sy, up);
++            fclose(sf);
+         }
+-        sprintf(sys_command, service_ctx.ptz_node.move_y, y_target);
+-        log_debug("PTZ: Executing move_y command: %s", sys_command);
+-        system(sys_command);
++        log_debug("PTZ: glide move sx=%d sy=%d ts=%.2f", sx, sy, up);
+         ret = 0;
+     }
+ 
+@@ -1259,11 +1246,17 @@
+         }
+     }
+ 
+-    // Per spec: zero velocity in an axis shall stop that axis
+-    if (pantilt_present && x != NULL && y != NULL && dx == 0.0 && dy == 0.0 && service_ctx.ptz_node.move_stop != NULL) {
+-        sprintf(sys_command, service_ctx.ptz_node.move_stop, "pantilt");
+-        log_debug("PTZ: Stopping pan/tilt due to zero velocity");
+-        system(sys_command);
++    // LEAN PATCH (Tapo C210): zero pan/tilt velocity => record a Stop event for
++    // the ptz-glide daemon (short grace, then coast to a halt). Never issue
++    // motors -d s (it races the daemon's in-flight relative step and corrupts
++    // position tracking).
++    if (pantilt_present && x != NULL && y != NULL && dx == 0.0 && dy == 0.0) {
++        double up = 0.0;
++        FILE *uf = fopen("/proc/uptime", "r");
++        if (uf != NULL) { if (fscanf(uf, "%lf", &up) != 1) up = 0.0; fclose(uf); }
++        FILE *sf = fopen(PTZ_GLIDE_STATE, "w");
++        if (sf != NULL) { fprintf(sf, "0 0 0 %.2f\n", up); fclose(sf); }
++        log_debug("PTZ: glide zero-velocity stop ts=%.2f", up);
+         ret = 0;
+     }
+     if (zoom_present && z != NULL && dz == 0.0 && service_ctx.ptz_node.move_stop != NULL) {
+@@ -1760,16 +1753,30 @@
+         zoom = 0;
+     }
+ 
+-    if (pantilt && zoom) {
+-        sprintf(sys_command, service_ctx.ptz_node.move_stop, "all");
+-        log_debug("PTZ: Executing stop command: %s", sys_command);
+-        system(sys_command);
+-    } else if (pantilt) {
+-        sprintf(sys_command, service_ctx.ptz_node.move_stop, "pantilt");
+-        system(sys_command);
+-    } else if (zoom) {
+-        sprintf(sys_command, service_ctx.ptz_node.move_stop, "zoom");
+-        system(sys_command);
++    // LEAN PATCH (Tapo C210): record a Stop event for the ptz-glide daemon
++    // instead of issuing motors -d s. Preserve the current direction so the
++    // daemon keeps gliding for a short grace (bridges the gap to the next
++    // ContinuousMove for pulse-style clients) and then coasts to a halt; a
++    // genuine release simply lets the grace lapse. Never issue motors -d s
++    // (it races the daemon's in-flight relative step and corrupts position
++    // tracking). The standard ONVIF Stop response is still returned.
++    (void) pantilt;
++    (void) zoom;
++    (void) sys_command;
++    {
++        int sx = 0, sy = 0;
++        double up = 0.0;
++        FILE *f = fopen(PTZ_GLIDE_STATE, "r");
++        if (f != NULL) {
++            /* keep direction; ignore old event/ts */
++            if (fscanf(f, "%d %d %*d %*f", &sx, &sy) != 2) { sx = 0; sy = 0; }
++            fclose(f);
++        }
++        f = fopen("/proc/uptime", "r");
++        if (f != NULL) { if (fscanf(f, "%lf", &up) != 1) up = 0.0; fclose(f); }
++        f = fopen(PTZ_GLIDE_STATE, "w");
++        if (f != NULL) { fprintf(f, "%d %d 0 %.2f\n", sx, sy, up); fclose(f); }
++        log_debug("PTZ: glide stop (dir %d %d) ts=%.2f", sx, sy, up);
+     }
+ 
+     long size = cat(NULL, "ptz_service_files/Stop.xml", 0);

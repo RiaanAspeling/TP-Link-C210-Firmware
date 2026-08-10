@@ -1,0 +1,44 @@
+# --- Custom: pan/tilt motor support for C210 (SPI TMI8150) ---
+BR2_PACKAGE_THINGINO_MOTORS=y
+BR2_PACKAGE_SPI_TMI8152_MOTOR=y
+
+# --- Pass 2: cut ISP reserved memory 26M -> 20M to give Linux +6MB RAM.
+# Proven live on camera #1 (osmem=44M / rmem=20M@0x2C00000): sustained 1080p
+# H.264 + AAC RTSP streaming stable, no ISP alloc errors. cameras-exp uses 20 too.
+BR2_THINGINO_RMEM_MB=20
+
+# =====================================================================
+# LEAN STRIP — Pass 1 (2026-08-10): remove dead-weight packages to free
+# flash (rootfs near full) + RAM. Keeps core streamer + WebRTC + stock
+# WebUI so browser preview/config still work during development.
+# =====================================================================
+
+# --- external extras: not used on this camera ---
+# BR2_PACKAGE_TELEGRAMBOT is not set
+# BR2_PACKAGE_THINGINO_HA is not set
+# BR2_PACKAGE_THINGINO_MOSQUITTO_20X is not set
+# BR2_PACKAGE_THINGINO_AGENT is not set
+# VPN is a choice block (default WireGuard via core.fragment) -> pick NONE
+BR2_PACKAGE_THINGINO_VPN_NONE=y
+# NOTE (pass 2): ONVIF + SOUNDS are hard-selected by device flags in the
+# top-level Config.in (DEV_IPCAM -> ONVIF, AUDIO -> SOUNDS), so `is not set`
+# cannot drop them. Remove via a tree patch in a later pass.
+
+# jct is needed by our daynight script; agent was one selector, so pin it
+BR2_PACKAGE_THINGINO_JCT=y
+
+# --- raptor streamer: drop FULL, cherry-pick only what we need ---
+# BR2_PACKAGE_THINGINO_RAPTOR_FULL is not set
+BR2_PACKAGE_THINGINO_RAPTOR_RVD=y
+BR2_PACKAGE_THINGINO_RAPTOR_RSD=y
+BR2_PACKAGE_THINGINO_RAPTOR_RAD=y
+BR2_PACKAGE_THINGINO_RAPTOR_RHD=y
+BR2_PACKAGE_THINGINO_RAPTOR_ROD=y
+BR2_PACKAGE_THINGINO_RAPTOR_RAC=y
+BR2_PACKAGE_THINGINO_RAPTOR_WEBRTC=y
+# dropped: our daynight replaces ric; motion OOMs; SRT/webtorrent unused
+# BR2_PACKAGE_THINGINO_RAPTOR_RIC is not set
+# BR2_PACKAGE_THINGINO_RAPTOR_RMD is not set
+# BR2_PACKAGE_THINGINO_RAPTOR_RMR is not set
+# BR2_PACKAGE_THINGINO_RAPTOR_RSP is not set
+# BR2_PACKAGE_THINGINO_RAPTOR_WEBTORRENT is not set

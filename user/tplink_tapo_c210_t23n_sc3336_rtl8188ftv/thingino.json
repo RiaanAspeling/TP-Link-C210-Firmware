@@ -1,0 +1,26 @@
+{
+  "motors": {
+    "is_spi": true,
+    "homing": true,
+    "gpio_power": 38,
+    "gpio_pan": "",
+    "gpio_tilt": "",
+    "gpio_switch": -1,
+    "invert_x": false,
+    "invert_y": false,
+    "steps_pan": 7850,
+    "steps_tilt": 2730,
+    "speed_pan": 430,
+    "speed_tilt": 430,
+    "pos_0": "3925,1365"
+  },
+  "gpio": {
+    "enable_ircut": false,
+    "enable_daynight": false
+  },
+  "daynight": {
+    "night_gain": 150,
+    "day_gain": 110,
+    "poll": 5
+  }
+}

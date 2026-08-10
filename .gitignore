@@ -1,0 +1,14 @@
+# --- personal device dumps: NEVER publish (contain per-device MAC/keys/calibration) ---
+/firmware-dumps/
+
+# --- build artifacts / large binaries (publish releases via GitHub Releases) ---
+/images/*.bin
+*.bin
+
+# --- local upstream build tree + build scratch (self-contained, never committed) ---
+/build/
+
+# --- editor / tooling ---
+.claude/
+.DS_Store
+*.swp
