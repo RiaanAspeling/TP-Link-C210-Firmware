@@ -136,12 +136,30 @@ The daemon's edge guards were also made direction-aware: they still suppress pus
 *further* into a limit (their real purpose, anti-oscillation) but no longer discard the
 move that leaves it, on the relative, in-flight and absolute paths alike.
 
-### Remaining limitation
+### Keep-off margin
 
-The chip counts steps it *commanded*, not steps achieved — there is no encoder. Physical
-stalling at an end-stop is therefore still invisible. Pan returns to presets exactly;
-**tilt drifts by a few degrees after being driven into a tilt end-stop**. Re-home with
-`motors -r` to re-zero it.
+The chip counts steps it *commanded*, not steps achieved — there is no encoder — so
+stalling against a mechanical stop loses steps invisibly and degrades preset accuracy.
+Homing anchors the far stop to `max_steps`, so an unmargined range would end *on* the
+stops and every trip to a limit would stall.
+
+Each axis therefore reserves a **keep-off margin** at both ends, default 48 steps (~2°,
+about 3.5% of tilt travel and 1.2% of pan). Normal PTZ and presets never reach the
+stops; only the once-per-boot homing sweep does, and that re-zeroes rather than
+accumulating error.
+
+Tunable at runtime, no rebuild needed:
+
+```bash
+jct /etc/thingino.json set motors.margin_tilt 80
+/etc/init.d/S59motor restart
+```
+
+Raise it if an axis still reaches a stop — the margin also has to absorb however much
+`steps_pan`/`steps_tilt` over-estimates true travel, and that gap can't be measured
+without feedback the hardware doesn't provide. It must exceed both the 16-step hardware
+quantum and the 24-step edge deadband to have any effect (10 steps, say, would do
+nothing), and is capped at `max_steps/4` so a bad value can't immobilise an axis.
 
 ### Notes for anyone working on this
 

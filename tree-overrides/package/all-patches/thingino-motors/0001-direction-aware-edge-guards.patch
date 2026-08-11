@@ -1,5 +1,5 @@
 From: Tapo-C210 lean firmware
-Subject: [PATCH] motors: direction-aware edge guards; never emit a sub-step move
+Subject: [PATCH] motors: direction-aware edge guards, keep-off margin, no sub-step moves
 
 The edge deadband guards discarded relative and absolute moves whenever the
 axis was parked in an edge band, without looking at the requested direction.
@@ -8,6 +8,16 @@ to tilt only and was fully direction-blind, which is why tilt - and never pan -
 would stick at a limit and refuse to reverse. Suppress only pushes further
 into the edge.
 
+Add a per-axis keep-off margin (motors.margin_pan / motors.margin_tilt,
+default 48 steps ~ 2 degrees). Homing anchors the far mechanical stop to
+max_steps, so without a margin the usable range ends ON the stops and every
+trip to a limit stalls the motor - losing steps invisibly, since there is no
+encoder, and degrading preset accuracy. With the margin only the once-per-boot
+homing sweep still touches a stop, and that re-zeroes rather than
+accumulating. The margin must exceed both the 16-step hardware quantum and the
+24-step edge deadband to have any effect; it is clamped to max_steps/4 so a
+bad value cannot immobilise an axis.
+
 Also round any residual below 16 steps up to the smallest displacement the
 TMI8152 can execute (it encodes abs(steps)/16 with integer truncation, so
 smaller residuals reach the chip as "go nowhere"), or drop it if that would
@@ -15,7 +25,133 @@ cross a limit.
 
 --- a/src/motor-daemon.c
 +++ b/src/motor-daemon.c
-@@ -1590,28 +1590,39 @@
+@@ -23,8 +23,27 @@
+ #define MOTOR_GPIO_STR_LEN 64
+ #define MOTOR_POS_STR_LEN 32
+ 
++/* Keep-off margin at each end of travel, in steps.
++ *
++ * Homing anchors the far mechanical stop to max_steps, so without a margin the
++ * usable range ends exactly ON the stops and every trip to a limit stalls the
++ * motor - losing steps invisibly (there is no encoder) and degrading preset
++ * accuracy. Reserving a margin at both ends keeps normal PTZ and presets clear
++ * of the stops; only the once-per-boot homing sweep still touches them, and
++ * that re-zeroes rather than accumulating.
++ *
++ * Must exceed BOTH the 16-step hardware quantum (moves are encoded as
++ * abs(steps)/16) and the 24-step edge deadband below, or it has no effect.
++ * ~48 steps is about 2 degrees on either axis. Tunable per axis at runtime via
++ * motors.margin_pan / motors.margin_tilt in /etc/thingino.json - raise it if an
++ * axis still reaches a stop, which happens when the configured max_steps
++ * over-estimates true travel by more than the margin.
++ */
++#define MOTOR_EDGE_MARGIN_DEFAULT 48
++
+ typedef struct {
+   int max_steps; // maximum steps for axis
++  int margin;    // keep-off margin at each end of travel (steps)
+   int home;      // center/home position
+   int speed;     // max/default speed for axis
+   int accel;     // acceleration in steps/s^2 (0 disables ramping)
+@@ -53,8 +72,10 @@
+ 
+ static MotorConfig g_cfg = {
+     .loglevel = 0,
+-    .pan = {0, 0, 0, 0, 0},
+-    .tilt = {0, 0, 0, 0, 0},
++    /* Designated: AxisCfg gained a `margin` field, and a positional list would
++       silently leave it at 0 (i.e. no keep-off margin at all). */
++    .pan = {.margin = MOTOR_EDGE_MARGIN_DEFAULT},
++    .tilt = {.margin = MOTOR_EDGE_MARGIN_DEFAULT},
+     .hw = {0},
+     .loaded = false,
+ };
+@@ -255,6 +276,12 @@
+ 
+   if (axis->max_steps < 0)
+     axis->max_steps = 0;
++  if (axis->margin < 0)
++    axis->margin = 0;
++  /* Never let the margins swallow the travel: keep at least half the range
++     usable, so a bad config cannot leave an axis unable to move. */
++  if (axis->max_steps > 0 && axis->margin > axis->max_steps / 4)
++    axis->margin = axis->max_steps / 4;
+   if (axis->speed < 0)
+     axis->speed = 0;
+   if (axis->accel < 0)
+@@ -269,8 +296,10 @@
+ 
+ static void reset_config_defaults(void) {
+   g_cfg.loglevel = 0;
+-  g_cfg.pan = (AxisCfg){0};
+-  g_cfg.tilt = (AxisCfg){0};
++  /* Re-apply the keep-off margin default: a plain {0} would drop it to zero,
++     putting the usable limits back ON the mechanical stops. */
++  g_cfg.pan = (AxisCfg){.margin = MOTOR_EDGE_MARGIN_DEFAULT};
++  g_cfg.tilt = (AxisCfg){.margin = MOTOR_EDGE_MARGIN_DEFAULT};
+   g_cfg.hw = (MotorHwCfg){0};
+   g_cfg.hw.limitless = false;
+   g_cfg.hw.gpio_switch = -1;
+@@ -370,6 +399,8 @@
+   parsed |= json_get_int_jct(motors, "timeout_tilt", &g_cfg.tilt.timeout);
+   parsed |= json_get_int_jct(motors, "home_pan", &g_cfg.pan.home);
+   parsed |= json_get_int_jct(motors, "home_tilt", &g_cfg.tilt.home);
++  parsed |= json_get_int_jct(motors, "margin_pan", &g_cfg.pan.margin);
++  parsed |= json_get_int_jct(motors, "margin_tilt", &g_cfg.tilt.margin);
+ 
+   return parsed;
+ }
+@@ -402,6 +433,7 @@
+   JsonValue *pan = get_object_item(root, "pan");
+   if (pan && pan->type == JSON_OBJECT) {
+     parsed |= json_get_int_jct(pan, "max_steps", &g_cfg.pan.max_steps);
++    parsed |= json_get_int_jct(pan, "margin", &g_cfg.pan.margin);
+     parsed |= json_get_int_jct(pan, "home", &g_cfg.pan.home);
+     parsed |= json_get_int_jct(pan, "speed", &g_cfg.pan.speed);
+     parsed |= json_get_int_jct(pan, "accel", &g_cfg.pan.accel);
+@@ -411,6 +443,7 @@
+   JsonValue *tilt = get_object_item(root, "tilt");
+   if (tilt && tilt->type == JSON_OBJECT) {
+     parsed |= json_get_int_jct(tilt, "max_steps", &g_cfg.tilt.max_steps);
++    parsed |= json_get_int_jct(tilt, "margin", &g_cfg.tilt.margin);
+     parsed |= json_get_int_jct(tilt, "home", &g_cfg.tilt.home);
+     parsed |= json_get_int_jct(tilt, "speed", &g_cfg.tilt.speed);
+     parsed |= json_get_int_jct(tilt, "accel", &g_cfg.tilt.accel);
+@@ -1575,43 +1608,67 @@
+                            ? g_cfg.tilt.max_steps
+                            : 0);
+ 
++            // Keep-off margin. Homing pins the far mechanical stop to
++            // max_steps, so an unmargined range ends ON the stops and every
++            // trip to a limit stalls the motor, losing steps invisibly (there
++            // is no encoder). Reserving a margin at both ends keeps normal PTZ
++            // and presets clear of them; only the boot homing sweep still
++            // touches a stop, and that re-zeroes rather than accumulating.
++            const int lo_x = g_cfg.pan.margin;
++            const int hi_x = runtime_x_max - g_cfg.pan.margin;
++            const int lo_y = g_cfg.tilt.margin;
++            const int hi_y = runtime_y_max - g_cfg.tilt.margin;
++
+             if (runtime_x_max > 0) {
+-              if (target_x < 0)
+-                target_x = 0;
+-              if (target_x > runtime_x_max)
+-                target_x = runtime_x_max;
++              if (target_x < lo_x)
++                target_x = lo_x;
++              if (target_x > hi_x)
++                target_x = hi_x;
+             }
+             if (runtime_y_max > 0) {
+-              if (target_y < 0)
+-                target_y = 0;
+-              if (target_y > runtime_y_max)
+-                target_y = runtime_y_max;
++              if (target_y < lo_y)
++                target_y = lo_y;
++              if (target_y > hi_y)
++                target_y = hi_y;
+             }
  
              // At edges, suppress tiny corrective oscillation from repeated
              // relative pushes and stale position updates.
@@ -25,15 +161,17 @@ cross a limit.
 +            // that would leave the edge, which strands the axis there with no
 +            // way back. Only a push further into (or exactly along) the edge
 +            // is oscillation; a push away from it is the user escaping.
++            // Bands sit at the MARGINED limits (lo/hi), not at 0/max_steps -
++            // those are the edges normal motion actually reaches now.
              const int edge_deadband = 24;
              if (runtime_x_max > 0) {
 -              if ((target_x >= runtime_x_max - edge_deadband &&
 -                   motor_message.x >= runtime_x_max - edge_deadband) ||
 -                  (target_x <= edge_deadband &&
 -                   motor_message.x <= edge_deadband)) {
-+              if ((motor_message.x >= runtime_x_max - edge_deadband &&
++              if ((motor_message.x >= hi_x - edge_deadband &&
 +                   target_x >= motor_message.x) ||
-+                  (motor_message.x <= edge_deadband &&
++                  (motor_message.x <= lo_x + edge_deadband &&
 +                   target_x <= motor_message.x)) {
                  target_x = motor_message.x;
                }
@@ -43,9 +181,9 @@ cross a limit.
 -                   motor_message.y >= runtime_y_max - edge_deadband) ||
 -                  (target_y <= edge_deadband &&
 -                   motor_message.y <= edge_deadband)) {
-+              if ((motor_message.y >= runtime_y_max - edge_deadband &&
++              if ((motor_message.y >= hi_y - edge_deadband &&
 +                   target_y >= motor_message.y) ||
-+                  (motor_message.y <= edge_deadband &&
++                  (motor_message.y <= lo_y + edge_deadband &&
 +                   target_y <= motor_message.y)) {
                  target_y = motor_message.y;
                }
@@ -60,14 +198,14 @@ cross a limit.
                if (motor_message.status == MOTOR_IS_RUNNING &&
 -                  (motor_message.y <= edge_deadband ||
 -                   motor_message.y >= runtime_y_max - edge_deadband)) {
-+                  ((motor_message.y <= edge_deadband &&
++                  ((motor_message.y <= lo_y + edge_deadband &&
 +                    target_y <= motor_message.y) ||
-+                   (motor_message.y >= runtime_y_max - edge_deadband &&
++                   (motor_message.y >= hi_y - edge_deadband &&
 +                    target_y >= motor_message.y))) {
                  target_y = motor_message.y;
                }
              }
-@@ -1619,6 +1630,28 @@
+@@ -1619,6 +1676,28 @@
              rel_x = target_x - motor_message.x;
              rel_y = target_y - motor_message.y;
  
@@ -81,14 +219,14 @@ cross a limit.
 +            if (rel_x != 0 && rel_x > -min_hw_steps && rel_x < min_hw_steps) {
 +              int want = (rel_x > 0) ? min_hw_steps : -min_hw_steps;
 +              int dest = motor_message.x + want;
-+              rel_x = (runtime_x_max > 0 && (dest < 0 || dest > runtime_x_max))
++              rel_x = (runtime_x_max > 0 && (dest < lo_x || dest > hi_x))
 +                          ? 0
 +                          : want;
 +            }
 +            if (rel_y != 0 && rel_y > -min_hw_steps && rel_y < min_hw_steps) {
 +              int want = (rel_y > 0) ? min_hw_steps : -min_hw_steps;
 +              int dest = motor_message.y + want;
-+              rel_y = (runtime_y_max > 0 && (dest < 0 || dest > runtime_y_max))
++              rel_y = (runtime_y_max > 0 && (dest < lo_y || dest > hi_y))
 +                          ? 0
 +                          : want;
 +            }
@@ -96,7 +234,37 @@ cross a limit.
              request_message.x = rel_x;
              request_message.y = rel_y;
              dispatch_profiled_move(rel_x, rel_y, request_speed,
-@@ -1679,20 +1712,26 @@
+@@ -1664,35 +1743,49 @@
+                 target_y >= (cfg_y_max - 1) && runtime_y_max > cfg_y_max)
+               target_y = runtime_y_max;
+ 
++            // Keep-off margin, as on the relative path: a preset must never be
++            // stored or reached ON a mechanical stop.
++            const int lo_x = g_cfg.pan.margin;
++            const int hi_x = runtime_x_max - g_cfg.pan.margin;
++            const int lo_y = g_cfg.tilt.margin;
++            const int hi_y = runtime_y_max - g_cfg.tilt.margin;
++
+             if (runtime_x_max > 0) {
+-              if (target_x < 0)
+-                target_x = 0;
+-              if (target_x > runtime_x_max)
+-                target_x = runtime_x_max;
++              if (target_x < lo_x)
++                target_x = lo_x;
++              if (target_x > hi_x)
++                target_x = hi_x;
+             }
+             if (runtime_y_max > 0) {
+-              if (target_y < 0)
+-                target_y = 0;
+-              if (target_y > runtime_y_max)
+-                target_y = runtime_y_max;
++              if (target_y < lo_y)
++                target_y = lo_y;
++              if (target_y > hi_y)
++                target_y = hi_y;
+             }
  
              // At mechanical edges, ignore tiny corrective nudges that cause
              // bounce when command and current are already at the same edge.
@@ -106,15 +274,16 @@ cross a limit.
 +            // unreachable, and blocks a preset that would move away from the
 +            // edge. Only suppress a target that sits further into the edge
 +            // than we already are.
++            // Bands sit at the MARGINED limits (lo/hi), not at 0/max_steps.
              const int edge_deadband = 24;
              if (runtime_x_max > 0) {
 -              if ((target_x >= runtime_x_max - edge_deadband &&
 -                   motor_message.x >= runtime_x_max - edge_deadband) ||
 -                  (target_x <= edge_deadband &&
 -                   motor_message.x <= edge_deadband)) {
-+              if ((motor_message.x >= runtime_x_max - edge_deadband &&
++              if ((motor_message.x >= hi_x - edge_deadband &&
 +                   target_x >= motor_message.x) ||
-+                  (motor_message.x <= edge_deadband &&
++                  (motor_message.x <= lo_x + edge_deadband &&
 +                   target_x <= motor_message.x)) {
                  target_x = motor_message.x;
                }
@@ -124,9 +293,9 @@ cross a limit.
 -                   motor_message.y >= runtime_y_max - edge_deadband) ||
 -                  (target_y <= edge_deadband &&
 -                   motor_message.y <= edge_deadband)) {
-+              if ((motor_message.y >= runtime_y_max - edge_deadband &&
++              if ((motor_message.y >= hi_y - edge_deadband &&
 +                   target_y >= motor_message.y) ||
-+                  (motor_message.y <= edge_deadband &&
++                  (motor_message.y <= lo_y + edge_deadband &&
 +                   target_y <= motor_message.y)) {
                  target_y = motor_message.y;
                }
