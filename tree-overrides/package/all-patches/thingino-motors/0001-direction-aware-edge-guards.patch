@@ -1,0 +1,133 @@
+From: Tapo-C210 lean firmware
+Subject: [PATCH] motors: direction-aware edge guards; never emit a sub-step move
+
+The edge deadband guards discarded relative and absolute moves whenever the
+axis was parked in an edge band, without looking at the requested direction.
+That also discarded the move needed to LEAVE the edge. One extra guard applied
+to tilt only and was fully direction-blind, which is why tilt - and never pan -
+would stick at a limit and refuse to reverse. Suppress only pushes further
+into the edge.
+
+Also round any residual below 16 steps up to the smallest displacement the
+TMI8152 can execute (it encodes abs(steps)/16 with integer truncation, so
+smaller residuals reach the chip as "go nowhere"), or drop it if that would
+cross a limit.
+
+--- a/src/motor-daemon.c
++++ b/src/motor-daemon.c
+@@ -1590,28 +1590,39 @@
+ 
+             // At edges, suppress tiny corrective oscillation from repeated
+             // relative pushes and stale position updates.
++            //
++            // These guards MUST consider the requested direction. Suppressing
++            // every move while parked in an edge band also discards the move
++            // that would leave the edge, which strands the axis there with no
++            // way back. Only a push further into (or exactly along) the edge
++            // is oscillation; a push away from it is the user escaping.
+             const int edge_deadband = 24;
+             if (runtime_x_max > 0) {
+-              if ((target_x >= runtime_x_max - edge_deadband &&
+-                   motor_message.x >= runtime_x_max - edge_deadband) ||
+-                  (target_x <= edge_deadband &&
+-                   motor_message.x <= edge_deadband)) {
++              if ((motor_message.x >= runtime_x_max - edge_deadband &&
++                   target_x >= motor_message.x) ||
++                  (motor_message.x <= edge_deadband &&
++                   target_x <= motor_message.x)) {
+                 target_x = motor_message.x;
+               }
+             }
+             if (runtime_y_max > 0) {
+-              if ((target_y >= runtime_y_max - edge_deadband &&
+-                   motor_message.y >= runtime_y_max - edge_deadband) ||
+-                  (target_y <= edge_deadband &&
+-                   motor_message.y <= edge_deadband)) {
++              if ((motor_message.y >= runtime_y_max - edge_deadband &&
++                   target_y >= motor_message.y) ||
++                  (motor_message.y <= edge_deadband &&
++                   target_y <= motor_message.y)) {
+                 target_y = motor_message.y;
+               }
+ 
+-              // If we are already running at a mechanical edge, ignore
+-              // additional relative Y nudges until motion settles.
++              // Same rule while a move is still in flight at an edge: drop
++              // only the nudges that push further in. This test used to be
++              // direction-blind and applied to tilt alone, which is why tilt
++              // - and never pan - would stick at a limit and refuse to
++              // reverse.
+               if (motor_message.status == MOTOR_IS_RUNNING &&
+-                  (motor_message.y <= edge_deadband ||
+-                   motor_message.y >= runtime_y_max - edge_deadband)) {
++                  ((motor_message.y <= edge_deadband &&
++                    target_y <= motor_message.y) ||
++                   (motor_message.y >= runtime_y_max - edge_deadband &&
++                    target_y >= motor_message.y))) {
+                 target_y = motor_message.y;
+               }
+             }
+@@ -1619,6 +1630,28 @@
+             rel_x = target_x - motor_message.x;
+             rel_y = target_y - motor_message.y;
+ 
++            // The TMI8152 encodes a move as abs(steps)/16 with integer
++            // truncation, so a residual below 16 steps reaches the chip as
++            // "go nowhere" while still being reported as a move. Round such a
++            // residual up to the smallest displacement the hardware can
++            // actually execute, or drop it outright if that would cross a
++            // limit - never issue a command that cannot physically move.
++            const int min_hw_steps = 16;
++            if (rel_x != 0 && rel_x > -min_hw_steps && rel_x < min_hw_steps) {
++              int want = (rel_x > 0) ? min_hw_steps : -min_hw_steps;
++              int dest = motor_message.x + want;
++              rel_x = (runtime_x_max > 0 && (dest < 0 || dest > runtime_x_max))
++                          ? 0
++                          : want;
++            }
++            if (rel_y != 0 && rel_y > -min_hw_steps && rel_y < min_hw_steps) {
++              int want = (rel_y > 0) ? min_hw_steps : -min_hw_steps;
++              int dest = motor_message.y + want;
++              rel_y = (runtime_y_max > 0 && (dest < 0 || dest > runtime_y_max))
++                          ? 0
++                          : want;
++            }
++
+             request_message.x = rel_x;
+             request_message.y = rel_y;
+             dispatch_profiled_move(rel_x, rel_y, request_speed,
+@@ -1679,20 +1712,26 @@
+ 
+             // At mechanical edges, ignore tiny corrective nudges that cause
+             // bounce when command and current are already at the same edge.
++            //
++            // Direction matters here too: suppressing every request while
++            // parked in an edge band makes any preset stored inside that band
++            // unreachable, and blocks a preset that would move away from the
++            // edge. Only suppress a target that sits further into the edge
++            // than we already are.
+             const int edge_deadband = 24;
+             if (runtime_x_max > 0) {
+-              if ((target_x >= runtime_x_max - edge_deadband &&
+-                   motor_message.x >= runtime_x_max - edge_deadband) ||
+-                  (target_x <= edge_deadband &&
+-                   motor_message.x <= edge_deadband)) {
++              if ((motor_message.x >= runtime_x_max - edge_deadband &&
++                   target_x >= motor_message.x) ||
++                  (motor_message.x <= edge_deadband &&
++                   target_x <= motor_message.x)) {
+                 target_x = motor_message.x;
+               }
+             }
+             if (runtime_y_max > 0) {
+-              if ((target_y >= runtime_y_max - edge_deadband &&
+-                   motor_message.y >= runtime_y_max - edge_deadband) ||
+-                  (target_y <= edge_deadband &&
+-                   motor_message.y <= edge_deadband)) {
++              if ((motor_message.y >= runtime_y_max - edge_deadband &&
++                   target_y >= motor_message.y) ||
++                  (motor_message.y <= edge_deadband &&
++                   target_y <= motor_message.y)) {
+                 target_y = motor_message.y;
+               }
+             }

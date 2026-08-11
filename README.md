@@ -19,10 +19,9 @@ ONVIF/RTSP software.
 | Snapshots — JPEG over HTTPS `:8443/snap.jpg` | ✅ |
 | ONVIF — WS-Discovery, Profile S, works with iSpy / AgentDVR / IP Cam Viewer | ✅ |
 | WebRTC preview in the stock web UI | ✅ |
-| Pan/tilt — via web UI and ONVIF absolute moves / presets | ✅ |
+| Pan/tilt — web UI, ONVIF continuous (press-and-hold), absolute moves, presets | ✅ |
 | IR-cut + automatic day/night (gain-based) | ✅ |
 | Wi-Fi setup, web UI, SSH | ✅ |
-| ONVIF **continuous** (press-and-hold) PTZ | ⚠️ see [Known issues](#known-issues) |
 
 ## Customisations in this repo
 
@@ -38,7 +37,11 @@ ONVIF/RTSP software.
   detection, SRT and webtorrent. Frees ~272 KB of flash and several daemons' worth of RAM.
 - **ISP reserved memory 26 MB → 20 MB** — gives Linux **+6 MB RAM** (33.5 → 39.6 MB), which
   matters a lot on this device. Verified stable with sustained 1080p + audio streaming.
-- **ONVIF PTZ patch + `ptz-glide` daemon** — work in progress, see Known issues.
+- **Pan/tilt position-tracking fixes** — three bugs in the stock TMI8152 driver and
+  motors daemon made the open-loop position tally diverge from reality until an axis
+  refused to move. See [Pan/tilt driver fixes](#pantilt-driver-fixes).
+- **ONVIF PTZ patch + `ptz-glide` daemon** — turns the stateless ONVIF CGI into a
+  smooth press-and-hold glide; the daemon is the sole motor-command writer.
 
 ## Layout
 
@@ -59,6 +62,7 @@ Requires `docker` and `git`; the toolchain image is pulled automatically.
 ```bash
 ./scripts/build.sh              # → images/thingino_tapo_c210_custom_<date>.bin
 CLEAN=1 ./scripts/build.sh      # required after disabling packages (see below)
+DIRCLEAN="spi-tmi8152 thingino-motors" ./scripts/build.sh   # after editing their patches
 ```
 
 First run clones upstream into `build/thingino/` (~11 GB with the download cache); later
@@ -68,6 +72,11 @@ runs reuse it. Overrides: `THINGINO_DIR=<path>`, `PIN=<sha>`, `NO_PIN=1`.
 > Buildroot doesn't prune `target/` when a package is removed, so an incremental build
 > silently keeps stale binaries — and the U-Boot env generator only *appends* `osmem`/`rmem`
 > if absent, so an incremental build keeps the old memory split.
+>
+> **Use `DIRCLEAN="<pkg>"` after adding or editing a patch** under
+> `tree-overrides/package/all-patches/<pkg>/`. Buildroot applies patches only at extract
+> time, so an already-extracted package silently ignores a new patch — the build succeeds
+> and the fix simply isn't in it.
 
 ## Flashing
 
@@ -97,23 +106,57 @@ admin access:
 | Web UI, SSH | `root` | System account; password set during Wi-Fi setup |
 | ONVIF, RTSP, snapshots | `thingino` | thingino default — **change it**, in `/etc/raptor.conf` + `/etc/onvif.json` |
 
-## Known issues
+## Pan/tilt driver fixes
 
-**ONVIF continuous (press-and-hold) PTZ is unreliable.** Absolute moves, presets, and the
-web UI controls all work; holding a direction button in an ONVIF client does not work
-consistently. Root cause: the motor is **open-loop with no position feedback** — firmware
-only counts commanded steps. The counter drifts from reality (driving into the end-stops
-makes it worse), and once it is pinned at an end, moves in that direction are clamped away
-and silently do nothing, so one axis direction stops responding.
+Out of the box this camera's tilt axis would stick at a travel limit and refuse to
+reverse, while pan never did. It looked like generic open-loop drift; it was actually
+three specific bugs, patched in
+`tree-overrides/package/all-patches/{spi-tmi8152,thingino-motors}/`.
 
-Notes for anyone picking this up:
+**1. The position tally counted backwards on an inverted axis.** `invert_x`/`invert_y`
+are applied only when encoding a move's direction for the chip, never when reading the
+displacement counter back — so position accumulated in *chip* space while all targets and
+limits live in *logical* space. On an inverted axis those run opposite, so the tally
+saturated at the limit the axis was being driven **away from**, and the clamp then blocked
+exactly the moves that would escape it. This board runs `invert_y=1` and `invert_x=0`,
+which is why only tilt ever stuck.
+
+**2. Stalling was recorded as success.** The driver's monitor thread committed the
+*predicted* target when a move ended, so ramming an end-stop — or issuing a move too small
+to execute — was logged as a completed move and inflated the tally. It now commits the
+displacement the chip actually measured.
+
+**3. Sub-quantum moves ran away.** Motion is encoded as `abs(steps)/16`, so a move under
+16 steps encodes to target 0 — which does not mean "stand still", it commands the chip to
+drive *to position 0*. The channel never reports arrival, so it ran until the 15 s
+watchdog and corrupted the tally. Observed as a 13-step preset correction sending pan to
+its minimum. Such requests are now dropped in the driver, covering every caller.
+
+The daemon's edge guards were also made direction-aware: they still suppress pushes
+*further* into a limit (their real purpose, anti-oscillation) but no longer discard the
+move that leaves it, on the relative, in-flight and absolute paths alike.
+
+### Remaining limitation
+
+The chip counts steps it *commanded*, not steps achieved — there is no encoder. Physical
+stalling at an end-stop is therefore still invisible. Pan returns to presets exactly;
+**tilt drifts by a few degrees after being driven into a tilt end-stop**. Re-home with
+`motors -r` to re-zero it.
+
+### Notes for anyone working on this
 
 - `motors -r` performs a **physical homing sequence** — it is not a counter reset.
-- Absolute moves (`motors -d h`) silently do nothing once the counter desyncs; relative
-  moves (`motors -d g -x <x> -y <y>`, **always pass both axes**) keep working. That is what
-  the web UI does — see `/var/www/x/json-motor.cgi` on the camera.
-- Verify movement from **snapshots**, never from the position counter: it happily reports
-  motion that didn't physically happen.
+- `POS_L/H` and `PHASE_L/H` are the **same registers**: a signed displacement counter
+  zeroed at each move start, not an absolute position.
+- Motion is quantised to 16 steps — a 1000-step request moves 992.
+- Verify movement from **snapshots**, never from the position counter.
+- To iterate without a full rebuild, build `motor.ko` against
+  `output/*/build/linux-*` and the daemon with
+  `make CROSS_COMPILE=mipsel-linux- JCT_PREFIX=<output>/staging/usr` (do **not** pass
+  `SYSROOT`, it breaks the header search), push both to `/tmp`, then `rmmod`/`insmod` and
+  run the daemon from there. Nothing touches flash and a reboot restores the image.
+- `pkill -x` silently fails on process names longer than 15 characters (`comm`
+  truncation) — kill by PID.
 
 ## Credits
 

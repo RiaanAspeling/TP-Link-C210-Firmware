@@ -12,6 +12,11 @@
 #   CLEAN=1        wipe this board's output dir first (needed after disabling
 #                  packages: Buildroot leaves stale files in target/ otherwise).
 #                  ccache still accelerates the recompile.
+#   DIRCLEAN="a b" re-extract these packages before building. REQUIRED after
+#                  adding or editing a patch in
+#                  tree-overrides/package/all-patches/<pkg>/ — Buildroot applies
+#                  patches only at extract time, so an already-extracted package
+#                  silently ignores a new patch. Much faster than CLEAN=1.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -50,14 +55,26 @@ docker image inspect "$IMG" >/dev/null 2>&1 || docker pull "$IMG"
 mkdir -p dl output
 OVR=""; [ -d overrides ] && OVR="-v $(readlink -f overrides):/overrides"
 
-# force rootfs regen so overlay/target-finalize re-applies our files
-rm -f output/*/images/rootfs.squashfs 2>/dev/null || true
+# force rootfs regen so overlay/target-finalize re-applies our files.
+# NOTE the glob depth: images/ lives at output/<ref>/<board>/images/, so a
+# single */ silently matched nothing and the pack step reused a stale rootfs.
+rm -f output/*/*/images/rootfs.squashfs 2>/dev/null || true
+
+# Per-package re-extract. `make fast` only builds what the pack step needs, so a
+# dirclean alone leaves the package MISSING and silently packs a stale rootfs —
+# each package must be rebuilt explicitly before packing.
+MAKE_CMDS=""
+for p in ${DIRCLEAN:-}; do
+  echo "== dirclean + rebuild $p (forces re-extract so its patches re-apply)"
+  MAKE_CMDS="$MAKE_CMDS BOARD=$CAM make $p-dirclean; BOARD=$CAM make $p;"
+done
+MAKE_CMDS="$MAKE_CMDS BOARD=$CAM make fast WORKFLOW=1"
 
 echo "== $(date +%T) starting build (make fast)"
 docker run --rm --user "$(id -u):$(id -g)" --network=host \
   -v "$PWD":/workspace $OVR -v "$PWD/dl":/dl -w /workspace \
   -e TERM=xterm-256color -e BR2_DL_DIR=/dl -e HOME=/workspace \
-  "$IMG" bash -lc "sudo update-alternatives --install /usr/bin/install install /usr/bin/gnuinstall 100 2>/dev/null; BOARD=$CAM make fast WORKFLOW=1"
+  "$IMG" bash -lc "sudo update-alternatives --install /usr/bin/install install /usr/bin/gnuinstall 100 2>/dev/null;$MAKE_CMDS"
 
 # 4. collect image ----------------------------------------------------------
 # newest by mtime (NOT alphabetical: detached-HEAD builds land in output/HEAD,

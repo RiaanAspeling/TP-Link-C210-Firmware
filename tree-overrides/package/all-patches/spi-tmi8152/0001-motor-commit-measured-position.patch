@@ -1,0 +1,150 @@
+From: Tapo-C210 lean firmware
+Subject: [PATCH] motor: logical-space position, measured travel, no sub-quantum moves
+
+Three defects made the open-loop position tally diverge from reality until the
+userspace clamp refused to move an axis at all.
+
+1. invert_[xy] was applied only when encoding a move direction for the chip,
+   never when reading the displacement counter back, so the tally accumulated
+   in CHIP space while targets and limits live in LOGICAL space. On an
+   inverted axis the two run opposite, so the tally saturated at the limit the
+   axis was being driven AWAY from and the clamp then blocked exactly the
+   moves that would leave it. This board runs invert_y=1 and invert_x=0 -
+   hence tilt sticking at an end-stop while pan never did. Fold the inversion
+   out in motor_read_position() so it always reports logical displacement.
+
+2. The monitor thread treated "position stopped changing" as "the move
+   completed" and stored the predicted target, so stalling against an
+   end-stop inflated the tally. Commit the displacement the chip actually
+   measured instead, by reusing motor_stop(). Zero the counter after
+   committing so the monitor thread and a racing MOTOR_STOP ioctl cannot
+   count the same move twice.
+
+3. A move smaller than one position quantum encodes to target 0, which does
+   not mean "stand still" - it commands the chip to drive to position 0. The
+   channel never reports arrival, so the move ran until the move_timeout_ms
+   watchdog fired and the displacement committed then corrupted the tally.
+   Observed as an absolute/preset move needing a 13-step correction sending
+   the pan axis to its minimum. Drop sub-quantum requests per axis, in the
+   driver so every caller is covered (daemon chunking, homing, presets).
+
+--- a/motor.c
++++ b/motor.c
+@@ -177,15 +177,28 @@
+ 				stable_count++;
+ 				/* Consider motor stopped after 2 consecutive stable readings (200ms) */
+ 				if (stable_count >= 2) {
+-					/* Commit pending targets when hardware reports idle */
+-					motor.x_pos = motor.target_x;
+-					motor.y_pos = motor.target_y;
+-					motor.target_x = motor.x_pos;
+-					motor.target_y = motor.y_pos;
+-					motor.move_deadline_jiffies = 0;
+-					pr_info("Motor stopped: x=%d, y=%d\n",
+-						motor.x_pos, motor.y_pos);
+-					motor.running = false;
++					/*
++					 * Commit the distance the motor ACTUALLY
++					 * travelled, not the target we predicted.
++					 *
++					 * The old code assigned motor.target_[xy]
++					 * here, i.e. it assumed every move ran to
++					 * completion. It does not: stalling against
++					 * a mechanical end-stop, or a move whose
++					 * magnitude truncates to zero in the /16
++					 * encoding, both look exactly like "position
++					 * stopped changing". Recording those as a
++					 * completed move is what made the position
++					 * tally drift away from reality until it
++					 * pinned at a limit - after which the
++					 * userspace clamp refused to move that axis
++					 * at all.
++					 *
++					 * motor_stop() already does the correct
++					 * thing (idle the channels, then add the
++					 * measured displacement), so reuse it.
++					 */
++					motor_stop();
+ 					stable_count = 0;
+ 				}
+ 			} else {
+@@ -340,6 +353,25 @@
+ 
+ 	pr_debug("Y-axis (ch%d): raw=0x%03X, steps=%d\n", motor.y_ch, raw_value, steps);
+ 
++	/*
++	 * invert_[xy] is applied ONLY when encoding a move's direction for the
++	 * chip (see motor_move_steps), never on the way back. So the
++	 * displacement counter reads in CHIP space, while motor.[xy]_pos, the
++	 * targets and every limit are tracked in LOGICAL space - and on an
++	 * inverted axis the two run in opposite directions.
++	 *
++	 * Fold the inversion out here so this function always reports logical
++	 * displacement. Without this the tally for an inverted axis counts
++	 * backwards: it saturates at the limit the axis is being driven AWAY
++	 * from, so the clamp then blocks exactly the moves that would leave
++	 * that limit. This camera runs invert_y=1 and invert_x=0, which is why
++	 * tilt would stick at an end-stop and pan never did.
++	 */
++	if (invert_x)
++		*x_pos = -*x_pos;
++	if (invert_y)
++		*y_pos = -*y_pos;
++
+ 	mutex_unlock(&tmi8152_spi_lock);
+ }
+ 
+@@ -361,6 +393,29 @@
+ 	if (x_steps == 0 && y_steps == 0)
+ 		return;
+ 
++	/*
++	 * Drop any request smaller than one position quantum.
++	 *
++	 * A move is encoded as abs(steps)/TMI8152_POS_SCALE, so a sub-quantum
++	 * request encodes to target 0 - which does NOT mean "stand still", it
++	 * commands the chip to drive to position 0. The channel is started and
++	 * never reports arrival, so the move runs until the move_timeout_ms
++	 * watchdog forces a stop, and the displacement committed at that point
++	 * corrupts the position tally. (Seen as an absolute/preset move needing
++	 * a 13-step correction sending the pan axis to its minimum.)
++	 *
++	 * Guard it here rather than in the daemon so every caller is covered,
++	 * including the daemon's profiled-move chunking and the homing phases.
++	 */
++	if (abs(x_steps) < TMI8152_POS_SCALE)
++		x_steps = 0;
++	if (abs(y_steps) < TMI8152_POS_SCALE)
++		y_steps = 0;
++	if (x_steps == 0 && y_steps == 0) {
++		pr_debug("motor_move_steps: sub-quantum request dropped\n");
++		return;
++	}
++
+ 	/* Predict final logical coordinates so status matches daemon expectations */
+ 	motor.target_x = motor.x_pos;
+ 	motor.target_y = motor.y_pos;
+@@ -652,6 +707,23 @@
+ 	/* Read current chip position */
+ 	motor_read_position(&x_pos, &y_pos);
+ 
++	/*
++	 * POS_L/H and PHASE_L/H are the same registers (0x08/0x09, 0x18/0x19):
++	 * a signed displacement counter that motor_move_steps() zeroes when a
++	 * move begins, so the value just read is the distance travelled by the
++	 * move that is now ending. Zero it again - the channels are idle, so
++	 * this cannot retrigger position mode - to make committing idempotent.
++	 * The monitor thread and an explicit MOTOR_STOP ioctl can both land
++	 * here for the same move; without this the displacement would be
++	 * counted twice.
++	 */
++	mutex_lock(&tmi8152_spi_lock);
++	tmi8152_spi_write(ch_phase_l[motor.x_ch] | 0x80, 0x00);
++	tmi8152_spi_write(ch_phase_h[motor.x_ch] | 0x80, 0x00);
++	tmi8152_spi_write(ch_phase_l[motor.y_ch] | 0x80, 0x00);
++	tmi8152_spi_write(ch_phase_h[motor.y_ch] | 0x80, 0x00);
++	mutex_unlock(&tmi8152_spi_lock);
++
+ 	/* Update position based on actual chip movement */
+ 	motor.x_pos += x_pos;
+ 	motor.y_pos += y_pos;
