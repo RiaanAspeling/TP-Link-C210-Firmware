@@ -140,26 +140,67 @@ move that leaves it, on the relative, in-flight and absolute paths alike.
 
 The chip counts steps it *commanded*, not steps achieved — there is no encoder — so
 stalling against a mechanical stop loses steps invisibly and degrades preset accuracy.
-Homing anchors the far stop to `max_steps`, so an unmargined range would end *on* the
-stops and every trip to a limit would stall.
 
-Each axis therefore reserves a **keep-off margin** at both ends, default 48 steps (~2°,
-about 3.5% of tilt travel and 1.2% of pan). Normal PTZ and presets never reach the
-stops; only the once-per-boot homing sweep does, and that re-zeroes rather than
-accumulating error.
+Note the asymmetry: `motor_homing()` rams the **far** stop and declares that point
+`max_steps`, so only that end is a real physical reference. Position `0` is never
+measured — it is just "`max_steps` counts below the top". Ramming the far stop is
+therefore self-correcting (you always end up at the same physical place), while ramming
+the `0` end silently de-anchors the whole axis.
+
+This is why an over-large `max_steps` shows up as slipping at the **far** end, which is
+misleading. Too large, and counter `0` sits below the real near stop; every trip to the
+bottom rams it and loses steps, so the counter now reads low relative to the mechanism.
+Drive back up and the gears hit the far stop long before the counter reaches its limit.
+The noise is at the top; the damage was done at the bottom.
+
+Each axis therefore reserves a **keep-off margin** at both ends. Normal PTZ and presets
+never reach the stops; only the once-per-boot homing sweep does, and that re-zeroes
+rather than accumulating error.
+
+**A margin only works if `steps_pan`/`steps_tilt` match real travel.** The stock
+`steps_tilt` for this board was **2730, but the tilt axis physically travels only
+~1930 steps** — so counters above ~1950 were a ~780-step (~35°) dead zone where the
+motor turned and the gears audibly slipped. No margin can help there: 48 and 200 both
+sit deep inside the dead zone, which is why raising it changed nothing. `steps_pan` was
+verified accurate, which is why pan never misbehaved.
+
+Measured with a monotonic sweep (all moves one direction, no reversals), snapshotting
+every 100 steps and looking for where the image stops changing:
+
+| Axis | Configured | Real travel | Margin | Backlash |
+|---|---|---|---|---|
+| Pan | 7850 | 7850 ✅ | 48 | ~16 steps (~0.7°) |
+| Tilt | 2730 ❌ → **1850** | ~1930 | 160 | ~80 steps (~3.5°) |
+
+`steps_tilt` is set slightly *below* measured travel so counter 0 lands just above the
+real bottom stop. The margin then has to beat that axis's backlash — 160 > 80 for tilt,
+48 > 16 for pan. Verified: at both tilt limits there is still real travel left, five
+full sweeps plus relative-path pushes produce no stalls and 0 watchdog timeouts.
+
+To re-measure on another unit: set `margin_tilt` to 0, drive to one end, then step to
+the other in 100-step increments comparing snapshots. Kill `daynight` first — the IR-cut
+flip reads as a huge false "movement".
 
 Tunable at runtime, no rebuild needed:
 
 ```bash
-jct /etc/thingino.json set motors.margin_tilt 80
-/etc/init.d/S59motor restart
+jct /etc/thingino.json set motors.margin_tilt 160
+/etc/init.d/S59motor restart      # see caveat below
 ```
 
-Raise it if an axis still reaches a stop — the margin also has to absorb however much
-`steps_pan`/`steps_tilt` over-estimates true travel, and that gap can't be measured
-without feedback the hardware doesn't provide. It must exceed both the 16-step hardware
-quantum and the 24-step edge deadband to have any effect (10 steps, say, would do
-nothing), and is capped at `max_steps/4` so a bad value can't immobilise an axis.
+If an axis still reaches a stop, **check `steps_*` before raising the margin** — a
+margin cannot compensate for a wrong travel figure, and raising it just wastes range.
+Use the re-measurement procedure above. The margin is capped at `max_steps/4` so a bad
+value can't immobilise an axis. Changing `steps_*` needs a reboot (it is a module
+parameter); a margin change only needs the daemon restarted.
+
+> `S59motor restart` fails silently if anything still holds the motor module: `stop()`
+> runs `rmmod motor` and `exit 1`s, so the restart never re-homes and the old margins
+> stay live. It leaves the position counter untouched, which looks like the new margin
+> "did nothing". Check with `motors -j` — if `speed` didn't reset, the restart aborted.
+> Restarting only the daemon (`kill` its PID, then `start-stop-daemon -S -b -m -p
+> /run/motors-daemon.pid -x /usr/bin/motors-daemon -- -d -p`) is enough for a margin
+> change and avoids the module entirely.
 
 ### Notes for anyone working on this
 

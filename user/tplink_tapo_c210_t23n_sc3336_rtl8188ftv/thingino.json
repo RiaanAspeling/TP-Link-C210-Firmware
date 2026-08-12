@@ -9,12 +9,12 @@
     "invert_x": false,
     "invert_y": false,
     "steps_pan": 7850,
-    "steps_tilt": 2730,
+    "steps_tilt": 1850,
     "margin_pan": 48,
-    "margin_tilt": 48,
+    "margin_tilt": 160,
     "speed_pan": 430,
     "speed_tilt": 430,
-    "pos_0": "3925,1365"
+    "pos_0": "3925,900"
   },
   "gpio": {
     "enable_ircut": false,
