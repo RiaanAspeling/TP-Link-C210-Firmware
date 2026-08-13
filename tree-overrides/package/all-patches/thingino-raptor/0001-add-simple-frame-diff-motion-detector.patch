@@ -1,0 +1,260 @@
+Add a built-in "simple" frame-difference motion detector
+
+The vendor IVS algorithms in this T23 libimp are unusable:
+
+  - algorithm = move       IMP_IVS_CreateChn succeeds, then rvd takes a
+                           SIGSEGV (epc=0, ra=0 — a call through a NULL
+                           function pointer) as soon as frames flow.
+  - algorithm = base_move  IMP_IVS_CreateBaseMoveInterface returns a handle
+                           but IMP_IVS_CreateChn rejects it with -1.
+
+Both fail inside the blob with the HAL calling correctly, so there is nothing
+to work around at our level.
+
+This adds algorithm = simple, which skips the IVS pipeline entirely and reads
+NV12 frames straight from FrameSource — the same route the JZDL standalone
+path already uses, and an API the encoder exercises every frame, so it is
+known good on this SoC. Each grid zone's mean luma is compared against the
+previous processed frame; a zone is active when the mean shifts by more than
+the sensitivity threshold.
+
+Only the Y plane is touched, subsampled 4x in both axes (~3.6k byte loads per
+frame for a 640x360 sub-stream at the default 4x4 grid), and results are fed
+to the existing ivs_process_move_result() so OSD, RMD and recording see the
+same state the vendor "move" algorithm produced.
+
+Costs no extra libraries: IVS_DETECT stays off, so libjzdl and libstdc++
+(~655 KB compressed) are not linked.
+
+--- a/rvd/rvd.h	2026-08-13 13:08:17.559526264 +0200
++++ b/rvd/rvd.h	2026-08-13 13:08:37.949106164 +0200
+@@ -145,6 +145,7 @@
+ 	bool ivs_persondet; /* true = persondet/jzdl algo */
+ 	bool ivs_base_move; /* true = base_move algo (vs move) */
+ 	bool ivs_jzdl;	    /* true = standalone JZDL inference */
++	bool ivs_simple;    /* true = built-in frame-difference detector */
+ 	void *jzdl_handle;  /* opaque JZDL context */
+ 	int ivs_grid_x;	    /* move detection grid columns */
+ 	int ivs_grid_y;	    /* move detection grid rows */
+--- a/rvd/rvd_ivs.c	2026-08-13 13:08:17.559491637 +0200
++++ b/rvd/rvd_ivs.c	2026-08-13 13:09:23.606880218 +0200
+@@ -27,8 +27,8 @@
+ 
+ #include "rvd.h"
+ 
+-#ifdef IVS_DETECT
+-/* FrameSource direct access — for JZDL standalone inference.
++/* FrameSource direct access — used by JZDL standalone inference and by the
++ * built-in "simple" frame-difference detector.
+  * Struct layout from imp_common.h, declared here to avoid SDK header dep. */
+ typedef struct {
+ 	int index;
+@@ -50,7 +50,6 @@
+ extern int IMP_FrameSource_SetFrameDepth(int chnNum, int depth);
+ extern int IMP_FrameSource_GetFrame(int chnNum, IMPFrameInfo **frame);
+ extern int IMP_FrameSource_ReleaseFrame(int chnNum, IMPFrameInfo *frame);
+-#endif
+ 
+ #define IVS_GRP 0 /* IVS groups are separate from encoder groups */
+ #define IVS_CHN 2 /* vendor sample uses chn 2 (0,1 used by encoder) */
+@@ -102,6 +101,40 @@
+ 
+ 	void *algo_handle = NULL;
+ 	st->ivs_persondet = false;
++	st->ivs_simple = false;
++
++	if (strcmp(algo, "simple") == 0) {
++		/*
++		 * Built-in frame-difference detector. The vendor IVS algorithms in
++		 * libimp are unusable on this SoC (move segfaults once frames flow,
++		 * base_move is rejected by IMP_IVS_CreateChn), so read frames
++		 * straight from FrameSource and diff them ourselves. No IVS group
++		 * channel, no interface, no extra libraries.
++		 */
++		const char *grid_str = rss_config_get_str(cfg, "motion", "grid", "4x4");
++		int gx = 4, gy = 4;
++
++		if (sscanf(grid_str, "%dx%d", &gx, &gy) < 2)
++			RSS_WARN("IVS: invalid grid '%s', using 4x4", grid_str);
++		if (gx < 1 || gy < 1 || gx * gy > RSS_IVS_MAX_ROI) {
++			RSS_WARN("IVS: grid %dx%d invalid, using 4x4", gx, gy);
++			gx = 4;
++			gy = 4;
++		}
++
++		st->ivs_simple = true;
++		st->ivs_grid_x = gx;
++		st->ivs_grid_y = gy;
++		st->ivs_roi_count = gx * gy;
++
++		atomic_store(&st->ivs_motion, false);
++		atomic_store(&st->ivs_motion_ts, 0);
++		atomic_store(&st->ivs_person_count, 0);
++
++		RSS_INFO("IVS: simple frame-diff on %dx%d, %dx%d grid (sensitivity=%d, skip=%d)",
++			 w, h, gx, gy, sensitivity, skip);
++		return RSS_OK;
++	}
+ 
+ #ifdef IVS_DETECT
+ 	if (strcmp(algo, "yolo") == 0) {
+@@ -283,6 +316,12 @@
+ 	if (!atomic_load(&st->ivs_active))
+ 		return;
+ 
++	/* Simple frame-diff — no IVS channel or interface was ever created */
++	if (st->ivs_simple) {
++		RSS_INFO("IVS: simple frame-diff stopped");
++		return;
++	}
++
+ #ifdef IVS_DETECT
+ 	/* JZDL standalone — no IVS channel to stop */
+ 	if (st->ivs_jzdl) {
+@@ -588,10 +627,146 @@
+ }
+ #endif
+ 
++
++/*
++ * Built-in frame-difference motion detector.
++ *
++ * Reads NV12 frames straight from FrameSource (the same route the JZDL
++ * standalone path uses) and compares the mean luma of each grid zone against
++ * the previous processed frame. A zone is "active" when its mean shifts by
++ * more than the sensitivity threshold.
++ *
++ * Only the Y plane is read, subsampled by SIMPLE_STEP in both axes, so the
++ * per-frame cost is a few thousand byte loads — negligible next to the
++ * encoder. Results are handed to ivs_process_move_result() in exactly the
++ * shape the vendor "move" algorithm produced, so OSD, RMD and recording
++ * behave identically.
++ */
++#define SIMPLE_STEP 4 /* sample every Nth pixel in x and y */
++
++/* sensitivity 0 (least) .. 4 (most) -> mean-luma delta required, in levels */
++static int simple_threshold(int sensitivity)
++{
++	static const int thr[5] = { 24, 16, 10, 6, 3 };
++
++	if (sensitivity < 0)
++		sensitivity = 0;
++	if (sensitivity > 4)
++		sensitivity = 4;
++	return thr[sensitivity];
++}
++
++static void *rvd_simple_thread(void *arg)
++{
++	rvd_state_t *st = arg;
++	int fs = st->ivs_fs_chn;
++	int gx = st->ivs_grid_x;
++	int gy = st->ivs_grid_y;
++	int total = st->ivs_roi_count;
++	int sensitivity = rss_config_get_int(st->cfg, "motion", "sensitivity", 3);
++	int skip = rss_config_get_int(st->cfg, "motion", "skip_frames", 5);
++	int threshold = simple_threshold(sensitivity);
++	int prev_mean[RSS_IVS_MAX_ROI];
++	bool have_prev = false;
++	uint32_t frame_no = 0;
++
++	if (skip < 0)
++		skip = 0;
++
++	RSS_INFO("IVS simple thread started (fs_chn=%d, threshold=%d)", fs, threshold);
++
++	/* Must be > 0 for GetFrame to return frames alongside the encoder. */
++	if (IMP_FrameSource_SetFrameDepth(fs, 1) != 0)
++		RSS_WARN("IVS simple: SetFrameDepth failed, detection may not work");
++
++	while (rss_running(st->running) && atomic_load(&st->ivs_active)) {
++		IMPFrameInfo *frame = NULL;
++		int ret = IMP_FrameSource_GetFrame(fs, &frame);
++		if (ret != 0 || !frame) {
++			usleep(100000);
++			continue;
++		}
++
++		/* Honour skip_frames: release promptly, do no work. */
++		if (skip > 0 && (frame_no++ % (uint32_t)(skip + 1)) != 0) {
++			IMP_FrameSource_ReleaseFrame(fs, frame);
++			continue;
++		}
++
++		const uint8_t *y = (const uint8_t *)frame->virAddr;
++		int w = (int)frame->width;
++		int h = (int)frame->height;
++
++		if (!y || w <= 0 || h <= 0) {
++			IMP_FrameSource_ReleaseFrame(fs, frame);
++			usleep(100000);
++			continue;
++		}
++
++		int cw = w / gx;
++		int ch = h / gy;
++		int mean[RSS_IVS_MAX_ROI];
++
++		if (cw <= 0 || ch <= 0) {
++			IMP_FrameSource_ReleaseFrame(fs, frame);
++			usleep(100000);
++			continue;
++		}
++
++		for (int row = 0; row < gy; row++) {
++			for (int col = 0; col < gx; col++) {
++				uint32_t sum = 0;
++				uint32_t n = 0;
++				int y0 = row * ch;
++				int x0 = col * cw;
++
++				for (int yy = y0; yy < y0 + ch; yy += SIMPLE_STEP) {
++					const uint8_t *line = y + (size_t)yy * w;
++					for (int xx = x0; xx < x0 + cw; xx += SIMPLE_STEP) {
++						sum += line[xx];
++						n++;
++					}
++				}
++				mean[row * gx + col] = n ? (int)(sum / n) : 0;
++			}
++		}
++
++		/* Frame data is not needed past this point. */
++		IMP_FrameSource_ReleaseFrame(fs, frame);
++
++		if (!have_prev) {
++			memcpy(prev_mean, mean, sizeof(int) * (size_t)total);
++			have_prev = true;
++			continue;
++		}
++
++		rss_ivs_move_result_t res;
++		memset(&res, 0, sizeof(res));
++		for (int i = 0; i < total && i < RSS_IVS_MAX_ROI; i++) {
++			int d = mean[i] - prev_mean[i];
++			if (d < 0)
++				d = -d;
++			res.ret_roi[i] = (d >= threshold) ? 1 : 0;
++		}
++
++		memcpy(prev_mean, mean, sizeof(int) * (size_t)total);
++
++		/* Reuse the vendor-move result path so downstream state matches. */
++		ivs_process_move_result(st, &res);
++	}
++
++	RSS_INFO("IVS simple thread exiting");
++	return NULL;
++}
++
+ void *rvd_ivs_thread(void *arg)
+ {
+ 	rvd_state_t *st = arg;
+ 
++	/* Built-in frame-difference detector — no IVS pipeline involved */
++	if (st->ivs_simple)
++		return rvd_simple_thread(arg);
++
+ #ifdef IVS_DETECT
+ 	/* JZDL standalone mode — different thread function */
+ 	if (st->ivs_jzdl)

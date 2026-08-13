@@ -20,6 +20,7 @@ ONVIF/RTSP software.
 | ONVIF — WS-Discovery, Profile S, works with iSpy / AgentDVR / IP Cam Viewer | ✅ |
 | WebRTC preview in the stock web UI | ✅ |
 | Pan/tilt — web UI, ONVIF continuous (press-and-hold), absolute moves, presets | ✅ |
+| Motion detection — custom frame-difference detector (vendor IVS is broken) | ✅ |
 | IR-cut + automatic day/night (gain-based) | ✅ |
 | Wi-Fi setup, web UI, SSH | ✅ |
 
@@ -42,6 +43,8 @@ ONVIF/RTSP software.
   refused to move. See [Pan/tilt driver fixes](#pantilt-driver-fixes).
 - **ONVIF PTZ patch + `ptz-glide` daemon** — turns the stateless ONVIF CGI into a
   smooth press-and-hold glide; the daemon is the sole motor-command writer.
+- **Motion detection** — this SoC's vendor IVS algorithms are broken, so raptor carries
+  a patch adding our own frame-difference detector. See [Motion detection](#motion-detection).
 
 ## Layout
 
@@ -201,6 +204,46 @@ parameter); a margin change only needs the daemon restarted.
 > Restarting only the daemon (`kill` its PID, then `start-stop-daemon -S -b -m -p
 > /run/motors-daemon.pid -x /usr/bin/motors-daemon -- -d -p`) is enough for a margin
 > change and avoids the module entirely.
+
+## Motion detection
+
+The vendor IVS algorithms in this T23 `libimp` are unusable — both fail inside the blob
+with the HAL calling correctly, so there is nothing to work around at our level:
+
+| `algorithm` | Interface created | Channel created | Result |
+|---|---|---|---|
+| `move` | ✅ | ✅ | **SIGSEGV** in `rvd` once frames flow (`epc=0, ra=0` — call through a NULL pointer) |
+| `base_move` | ✅ | ❌ `-1` | `IMP_IVS_CreateChn` rejects the interface; fails cleanly |
+
+So `tree-overrides/package/all-patches/thingino-raptor/` adds **`algorithm = simple`**: a
+frame-difference detector that skips IVS entirely and reads NV12 frames straight from
+FrameSource — the same route the JZDL standalone path uses, and an API the encoder
+exercises every frame, so it is known good here. Each grid zone's mean luma is compared
+against the previous processed frame; a zone is active when the mean shifts past the
+sensitivity threshold. Results feed the existing `ivs_process_move_result()`, so OSD, RMD
+and recording behave exactly as with the vendor algorithm.
+
+Only the Y plane is read, subsampled 4× in both axes — a few thousand byte loads per
+frame. Measured CPU cost was **within noise** of motion-disabled, and it needs **no extra
+libraries**: `IVS_DETECT` stays off, so `libjzdl` + `libstdc++` (~655 KB compressed) are
+never linked. Enabling it costs only `rmd` at **13.8 KB**.
+
+```ini
+[motion]
+enabled = true
+algorithm = simple
+sensitivity = 3      # 0 (least) - 4 (most); threshold 24/16/10/6/3 luma levels
+grid = 4x4           # 16 zones
+skip_frames = 5      # process every Nth frame
+```
+
+Verified on hardware: static scene 12 s → **0** events; a real pan/tilt → motion; a move
+clamped to zero travel → **0** events. That last pair is the signal an auto-calibration
+routine needs — "did the mechanism actually move?" — without any host-side tooling.
+
+> `rmd` is only the controller; the detector runs inside `rvd`. `raptorctl rmd status`
+> reports rmd's *recording* state machine, not the motion flag — during detection it
+> still reads `idle` unless `record = true`. Check `logread` for `motion detected`.
 
 ### Notes for anyone working on this
 

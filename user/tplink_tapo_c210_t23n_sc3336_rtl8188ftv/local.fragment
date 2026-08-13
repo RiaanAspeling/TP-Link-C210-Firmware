@@ -36,9 +36,13 @@ BR2_PACKAGE_THINGINO_RAPTOR_RHD=y
 BR2_PACKAGE_THINGINO_RAPTOR_ROD=y
 BR2_PACKAGE_THINGINO_RAPTOR_RAC=y
 BR2_PACKAGE_THINGINO_RAPTOR_WEBRTC=y
-# dropped: our daynight replaces ric; motion OOMs; SRT/webtorrent unused
+# dropped: our daynight replaces ric; SRT/webtorrent unused
 # BR2_PACKAGE_THINGINO_RAPTOR_RIC is not set
-# BR2_PACKAGE_THINGINO_RAPTOR_RMD is not set
+# RMD is the motion-detection controller (13.8 KB). The detector itself runs in
+# rvd — our "simple" frame-diff patch, since the vendor IVS algorithms are
+# broken on this libimp. Deliberately NOT setting IVS_DETECT: it force-links
+# libjzdl + libstdc++ (~655 KB) and is only needed for the JZDL/YOLO paths.
+BR2_PACKAGE_THINGINO_RAPTOR_RMD=y
 # BR2_PACKAGE_THINGINO_RAPTOR_RMR is not set
 # BR2_PACKAGE_THINGINO_RAPTOR_RSP is not set
 # BR2_PACKAGE_THINGINO_RAPTOR_WEBTORRENT is not set
