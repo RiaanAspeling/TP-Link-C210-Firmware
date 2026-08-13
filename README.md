@@ -234,8 +234,29 @@ cruise-decelerate seek, identical to ONVIF.
 | CGI | Purpose |
 |---|---|
 | `x/ptz.cgi` | press-and-hold PTZ via `/tmp/ptz_glide`; parses its query string **without `eval`** |
+| `x/presets.cgi` | PTZ presets via `/sbin/ptz_presets` — the store ONVIF uses |
+| `x/motion.cgi` | motion state, zone bitmap, zone mask |
+| `x/video.cgi` | frame rate / bitrate: applies live and persists to `raptor.conf` |
 | `x/mjpeg.cgi` | same-origin MJPEG proxy for rhd (fallback preview) |
 | `x/webrtc-whip.cgi` | **override** of raptor's WHIP proxy — see below |
+
+**Presets are shared with ONVIF.** `x/presets.cgi` wraps `/sbin/ptz_presets`
+(`/etc/ptz_presets.conf`), which `onvif.json` already wires to set/get/move/remove — so
+a preset saved in the browser appears in iSpy and IP Cam Viewer and vice versa. That
+script interpolates the preset name straight into a `sed` replacement, so the CGI strips
+everything outside `[A-Za-z0-9 _-]` before passing it on.
+
+**Frame rate and bitrate are encoder-wide.** They change the stream for every consumer —
+RTSP, ONVIF, recordings — unlike the stream selector, which is per-browser. `video.cgi`
+persists them with a targeted section-aware edit rather than `raptorctl config save`,
+which rewrites the whole running config and adds unrelated state (OSD positions) to the
+file.
+
+**Audio is off by default.** `[webrtc] audio_mode = opus` makes rwd transcode AAC→Opus
+for the lifetime of any session that negotiates audio, so the offer omits the audio
+m-line unless you turn Sound on. When it is on the transceiver must be `sendrecv`, not
+`recvonly` — rwd answers `sendrecv` for its talk-back channel and an answer may not
+widen the offered direction, which fails as *"Incompatible send direction"*.
 
 ### Why we override `webrtc-whip.cgi`
 
@@ -299,6 +320,29 @@ routine needs — "did the mechanism actually move?" — without any host-side t
 > `rmd` is only the controller; the detector runs inside `rvd`. `raptorctl rmd status`
 > reports rmd's *recording* state machine, not the motion flag — during detection it
 > still reads `idle` unless `record = true`. Check `logread` for `motion detected`.
+
+### Zones
+
+A second patch keeps the per-zone bitmap that the stock handler threw away. It used to
+collapse every active zone into one bounding box — which, with two moving objects, covers
+both plus everything between them.
+
+- `ivs_zone_hits` — bitmap of zones active in the last processed frame, for display.
+- `ivs_zone_enable` — mask of zones allowed to raise motion, `0` = all on. Settable at
+  runtime with `ivs-set-zones`, no pipeline restart.
+
+A masked zone **still reports hits**, so the UI can render it as "seen but ignored"; it
+simply stops raising motion. Otherwise masking a busy corner would not stop recordings
+firing. `ivs-status` also reports `grid_x`/`grid_y`/`zones` so a client can lay out
+whatever grid is configured instead of hardcoding 4×4.
+
+The WebUI's **Zones** button cycles hidden → shown → editable; in edit mode clicking a
+cell toggles it out of the mask.
+
+> `raptorctl`'s positional form does not marshal an argument into a command's `value`
+> field — even the stock `raptorctl rvd ivs-set-sensitivity 3` fails with "invalid or ivs
+> not active" for that reason. Use the documented raw-JSON form:
+> `raptorctl -j '{"daemon":"rvd","cmd":"ivs-set-zones","value":0}'`.
 
 ### Notes for anyone working on this
 

@@ -15,6 +15,21 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #stage{position:fixed;inset:0;background:#000}
 #v{width:100%;height:100%;object-fit:contain;display:block;background:#000}
 
+/* Motion zone grid, laid over the video. Hidden unless the user turns it on.
+   Sized to the video's real letterboxed rect, not the whole stage.
+   position:fixed so getBoundingClientRect() coordinates apply directly;
+   z-index 2 keeps it above the video but under the bar/pad/presets (all 3). */
+#grid{position:fixed;display:none;pointer-events:none;z-index:2}
+#grid.show{display:grid}
+#grid.edit{pointer-events:auto}
+#grid .z{border:1px solid #ffffff14;transition:background .18s,border-color .18s}
+#grid .z.hit{background:#3ddc8433;border-color:#3ddc84aa}
+#grid.edit .z{cursor:pointer;border-color:#ffffff2e}
+#grid.edit .z:hover{border-color:#fff6}
+#grid .z.off{background:#0009}
+#grid.edit .z.off{background:#ff6b6b26;border-color:#ff6b6b55}
+#grid .z.off.hit{background:#ff6b6b1f;border-color:#ff6b6b55}
+
 .bar{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:10px;
      padding:10px 14px;background:linear-gradient(#000c,#0000);z-index:3}
 .bar h1{margin:0;font-size:14px;font-weight:600;letter-spacing:.2px}
@@ -49,6 +64,21 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #hud button:active{background:var(--accent);border-color:var(--accent)}
 #pos b{color:var(--fg);font-weight:600}
 
+/* video settings popover, hangs under the top bar */
+#videopanel{position:fixed;top:48px;right:14px;z-index:4;width:230px;
+            background:#1e2127f2;border:1px solid var(--line);border-radius:10px;
+            padding:14px;backdrop-filter:blur(8px);
+            display:flex;flex-direction:column;gap:10px}
+#videopanel[hidden]{display:none}
+#videopanel label{display:flex;flex-direction:column;gap:5px;font-size:11px;
+                  color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+#videopanel select{background:#15171c;color:var(--fg);border:1px solid var(--line);
+                   border-radius:6px;padding:7px;font-size:13px;text-transform:none;
+                   letter-spacing:0;font-family:inherit;cursor:pointer}
+#videopanel select:focus{outline:none;border-color:var(--accent)}
+#videopanel .note{margin:0;font-size:11px;line-height:1.4;color:var(--muted)}
+#videopanel .note em{color:var(--fg);font-style:normal}
+
 /* preset bar, bottom-centre between the HUD and the pad */
 #presets{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:3;
          display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;
@@ -79,7 +109,7 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 </style>
 </head>
 <body>
-<div id="stage"><video id="v" autoplay playsinline muted></video></div>
+<div id="stage"><video id="v" autoplay playsinline muted></video><div id="grid"></div></div>
 <div id="msg">Connecting…</div>
 
 <div class="bar">
@@ -87,10 +117,9 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
   <h1>Camera</h1>
   <span id="state"></span>
   <span class="sp"></span>
-  <select id="quality" title="Video stream">
-    <option value="0">1080p</option>
-    <option value="1">360p</option>
-  </select>
+  <button id="sound">Sound: off</button>
+  <button id="zones" title="Show motion zones; click again to edit the mask">Zones</button>
+  <button id="videobtn" title="Stream, frame rate and bitrate">Video ▾</button>
   <button id="reconnect" title="Reconnect the video stream">Reconnect</button>
   <a href="#" id="logout">Sign out</a>
 </div>
@@ -105,6 +134,34 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
   <span></span>
   <button data-sx="0"  data-sy="-1" aria-label="Tilt down">&#9660;</button>
   <span></span>
+</div>
+
+<div id="videopanel" hidden>
+  <label>Stream
+    <select id="quality">
+      <option value="0">1080p (main)</option>
+      <option value="1">360p (sub)</option>
+    </select>
+  </label>
+  <label>Frame rate
+    <select id="fps">
+      <option value="25">25 fps</option>
+      <option value="20">20 fps</option>
+      <option value="15">15 fps</option>
+      <option value="10">10 fps</option>
+      <option value="5">5 fps</option>
+    </select>
+  </label>
+  <label>Bitrate
+    <select id="bitrate">
+      <option value="3000000">3.0 Mbps</option>
+      <option value="2000000">2.0 Mbps</option>
+      <option value="1000000">1.0 Mbps</option>
+      <option value="500000">0.5 Mbps</option>
+    </select>
+  </label>
+  <p class="note">Frame rate and bitrate change the encoder for <em>every</em> client —
+     RTSP, ONVIF, recordings — and are saved. The stream choice is only for this browser.</p>
 </div>
 
 <div id="presets"></div>
@@ -222,6 +279,87 @@ async function loadPresets(){
   if(j&&j.presets)renderPresets(j.presets);
 }
 
+/* ---------- Motion zones --------------------------------------------------
+   Three states per cell: idle, hit (motion this frame), off (masked out).
+   A masked cell still reports hits — rvd keeps it in the bitmap so we can show
+   "seen but ignored" — it just no longer raises motion or triggers recording.
+
+   Button cycles: hidden -> shown -> editable -> hidden. */
+const gridEl=$('grid'), zonesBtn=$('zones');
+let gridMode=0;               // 0 hidden, 1 show, 2 edit
+let gx=0, gy=0, zoneMask=0, cells=[];
+
+function layoutGrid(){
+  // Match the video's letterboxed rect rather than the element box, or the
+  // zones drift away from the picture on non-16:9 windows.
+  // Never touch style.display here: an inline value would beat the .show class
+  // and pin the grid hidden.
+  if(!gx||!gy)return;
+  const vw=v.videoWidth, vh=v.videoHeight, r=v.getBoundingClientRect();
+  let left=r.left, top=r.top, w=r.width, h=r.height;
+  if(vw&&vh){                       // letterbox correction once metadata exists
+    const scale=Math.min(r.width/vw, r.height/vh);
+    w=vw*scale; h=vh*scale;
+    left=r.left+(r.width-w)/2; top=r.top+(r.height-h)/2;
+  }
+  Object.assign(gridEl.style,{left:left+'px',top:top+'px',width:w+'px',height:h+'px'});
+}
+function buildGrid(){
+  gridEl.textContent=''; cells=[];
+  // Set the track template here too — layoutGrid can bail before metadata,
+  // and without a template every cell would collapse into one column.
+  gridEl.style.gridTemplateColumns=`repeat(${gx},1fr)`;
+  gridEl.style.gridTemplateRows=`repeat(${gy},1fr)`;
+  for(let i=0;i<gx*gy;i++){
+    const c=document.createElement('div');
+    c.className='z';
+    c.onclick=()=>{ if(gridMode!==2)return;
+      zoneMask=(zoneMask||((1<<(gx*gy))-1))^(1<<i);   // 0 means "all on"; expand before toggling
+      applyMask();
+    };
+    cells.push(c); gridEl.append(c);
+  }
+  layoutGrid();
+}
+async function applyMask(){
+  const j=await motionApi('a=mask&v='+(zoneMask>>>0));
+  if(j)paintZones(j);
+}
+async function motionApi(qs){
+  const r=await fetch('/x/motion.cgi?'+qs,{cache:'no-store'});
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
+}
+function paintZones(s){
+  if(!s||!s.zones)return;
+  if(s.grid_x!==gx||s.grid_y!==gy){gx=s.grid_x;gy=s.grid_y;buildGrid();}
+  zoneMask=s.zone_enable|0;
+  const hits=s.zone_hits|0, all=(1<<(gx*gy))-1, enabled=zoneMask?zoneMask:all;
+  cells.forEach((c,i)=>{
+    c.classList.toggle('hit', !!(hits&(1<<i)));
+    c.classList.toggle('off', !(enabled&(1<<i)));
+  });
+  dot.classList.toggle('bad',false);
+}
+zonesBtn.onclick=()=>{
+  gridMode=(gridMode+1)%3;
+  gridEl.classList.toggle('show',gridMode>0);
+  gridEl.classList.toggle('edit',gridMode===2);
+  zonesBtn.textContent=['Zones','Zones ●','Zones ✎'][gridMode];
+  zonesBtn.title=['Show motion zones',
+                  'Zones shown — click again to edit the mask',
+                  'Click a zone to ignore it; click again to hide'][gridMode];
+  // Video metadata may not have arrived yet on a fresh connect; re-measure
+  // shortly after so the grid snaps onto the picture rather than the element box.
+  if(gridMode>0){layoutGrid();pollMotion();setTimeout(layoutGrid,600);}
+};
+async function pollMotion(){
+  if(gridMode===0)return;
+  paintZones(await motionApi('a=status'));
+}
+addEventListener('resize',layoutGrid);
+v.addEventListener('loadedmetadata',layoutGrid);
+
 /* ---------- Video (WebRTC) ------------------------------------------------
    MJPEG was tried first and tops out near 3 fps on this SoC regardless of the
    [jpeg] fps setting, so the live view uses WebRTC via raptor's same-origin
@@ -230,10 +368,64 @@ let pc=null, resource=null;
 function setState(t,cls){ state.textContent=t; dot.className='dot'+(cls?' '+cls:''); }
 
 /* Stream choice: 0 = main (1080p), 1 = sub (640x360). Remembered per browser.
-   Switching requires a fresh PeerConnection, so just reconnect. */
-const QKEY='cam.stream', quality=$('quality');
+   Switching requires a fresh PeerConnection, so just reconnect.
+   Frame rate and bitrate are ENCODER settings — they apply to every consumer
+   (RTSP, ONVIF, recordings) and are persisted to raptor.conf. */
+const QKEY='cam.stream', quality=$('quality'), panel=$('videopanel');
+const fpsSel=$('fps'), brSel=$('bitrate');
 quality.value=localStorage.getItem(QKEY)||'0';
-quality.onchange=()=>{ localStorage.setItem(QKEY,quality.value); connect(); };
+quality.onchange=()=>{ localStorage.setItem(QKEY,quality.value); loadVideoSettings(); connect(); };
+
+$('videobtn').onclick=e=>{
+  e.stopPropagation();
+  panel.hidden=!panel.hidden;
+  if(!panel.hidden)loadVideoSettings();
+};
+document.addEventListener('click',e=>{
+  if(!panel.hidden && !panel.contains(e.target))panel.hidden=true;
+});
+
+function nearestOption(sel,val){
+  // Encoder may report a value we don't list (set over SSH); snap to closest.
+  let best=sel.options[0];
+  for(const o of sel.options)
+    if(Math.abs(o.value-val)<Math.abs(best.value-val))best=o;
+  return best.value;
+}
+async function videoApi(qs){
+  const r=await fetch('/x/video.cgi?'+qs,{cache:'no-store'});
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
+}
+async function loadVideoSettings(){
+  const j=await videoApi('a=get');
+  const s=j&&j.streams&&j.streams.find(x=>x.chn==quality.value);
+  if(!s)return;
+  fpsSel.value=nearestOption(fpsSel,s.fps);
+  brSel.value =nearestOption(brSel,s.bitrate);
+}
+async function applyVideo(key,val){
+  const j=await videoApi(`a=set&ch=${quality.value}&${key}=${val}`);
+  if(j&&j.error)setState('error: '+j.error,'bad');
+}
+// Encoder changes take effect live — no reconnect needed.
+fpsSel.onchange=()=>applyVideo('fps',fpsSel.value);
+brSel.onchange =()=>applyVideo('bitrate',brSel.value);
+
+/* Audio is off by default — see the transceiver comment in connect(). */
+const SKEY='cam.sound', soundBtn=$('sound');
+let soundOn=localStorage.getItem(SKEY)==='1';
+// Label shows the CURRENT state, not what clicking will do.
+function paintSound(){
+  soundBtn.textContent=soundOn?'Sound: on':'Sound: off';
+  soundBtn.title=soundOn
+    ? 'Audio is on. Click to turn it off — rwd transcodes AAC to Opus while audio is negotiated, which costs CPU.'
+    : 'Audio is off (saves CPU). Click to turn it on.';
+  v.muted=!soundOn;
+}
+soundBtn.onclick=()=>{ soundOn=!soundOn; localStorage.setItem(SKEY,soundOn?'1':'0');
+                       paintSound(); connect(); };
+paintSound();
 
 async function connect(){
   await disconnect();
@@ -241,12 +433,17 @@ async function connect(){
   msg.textContent='Connecting…'; msg.classList.add('show');
   try{
     pc=new RTCPeerConnection({iceServers:[],bundlePolicy:'max-bundle'});
-    // Offer BOTH m-lines. rwd answers with audio+video, and setRemoteDescription
-    // throws on an m-line count/order mismatch if we only offered video.
-    // sendrecv on audio matches raptor's own client and leaves the two-way
-    // backchannel available later; we simply never attach a local track.
     pc.addTransceiver('video',{direction:'recvonly'});
-    pc.addTransceiver('audio',{direction:'sendrecv'});
+    // Audio only when asked for. [webrtc] audio_mode = opus means rwd
+    // transcodes AAC->Opus for the lifetime of any session that negotiates
+    // audio, which is CPU we would otherwise spend on frames. rwd is happy with
+    // a video-only offer (it answers audio_pt=-1).
+    //
+    // Must be sendrecv, not recvonly: rwd answers sendrecv for its talk-back
+    // channel, and an answer may not widen the direction the offer asked for —
+    // recvonly gets "Incompatible send direction" from setRemoteDescription.
+    // We simply never attach a local track, exactly as raptor's own client does.
+    if(soundOn) pc.addTransceiver('audio',{direction:'sendrecv'});
     pc.ontrack=e=>{
       if(!v.srcObject)v.srcObject=new MediaStream();
       v.srcObject.addTrack(e.track);
@@ -302,6 +499,7 @@ connect();
 poll();
 loadPresets();
 setInterval(poll,2000);
+setInterval(pollMotion,700);   // fast enough to see a zone flash, cheap enough to leave running
 </script>
 </body>
 </html>

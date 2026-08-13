@@ -1,0 +1,103 @@
+Expose per-zone motion state and add a runtime zone mask
+
+The move-result handler collapsed the per-zone array into a bounding box and
+threw the rest away, so a UI could only draw one rectangle - and with two
+separate moving objects that box covers both plus everything between them.
+
+Keeps the raw bitmap (ivs_zone_hits) for display, and adds a mask
+(ivs_zone_enable, 0 = all zones on) that suppresses motion from zones the user
+has switched off. Masked zones still appear in the bitmap so the UI can render
+them as "seen but ignored"; they simply do not raise motion, which matters
+because otherwise masking a busy corner would not stop recordings firing.
+
+ivs-status now also reports grid_x/grid_y/zones so a client can lay the grid
+out without hardcoding 4x4, and ivs-set-zones sets the mask at runtime - no
+pipeline restart, matching how ivs-set-sensitivity already behaves.
+
+Both bitmaps are uint64, which covers the 52-ROI ceiling (RSS_IVS_MAX_ROI).
+
+--- a/rvd/rvd.h	2026-08-13 16:41:16.357126704 +0200
++++ b/rvd/rvd.h	2026-08-13 16:41:35.442483618 +0200
+@@ -146,6 +146,8 @@
+ 	bool ivs_base_move; /* true = base_move algo (vs move) */
+ 	bool ivs_jzdl;	    /* true = standalone JZDL inference */
+ 	bool ivs_simple;    /* true = built-in frame-difference detector */
++	_Atomic uint64_t ivs_zone_hits;   /* bitmap of zones active in the last frame */
++	_Atomic uint64_t ivs_zone_enable; /* bitmap of zones that count; 0 = all on */
+ 	void *jzdl_handle;  /* opaque JZDL context */
+ 	int ivs_grid_x;	    /* move detection grid columns */
+ 	int ivs_grid_y;	    /* move detection grid rows */
+--- a/rvd/rvd_ivs.c	2026-08-13 16:41:16.356027397 +0200
++++ b/rvd/rvd_ivs.c	2026-08-13 16:41:35.442666596 +0200
+@@ -421,6 +421,26 @@
+ 		return;
+ 	}
+ 
++	/*
++	 * Publish the raw per-zone bitmap for the UI, and apply the zone mask.
++	 * A zone the user has switched off still shows as "seen" in the bitmap
++	 * (so the grid can render it) but must not raise motion, or masking a
++	 * busy corner would not stop recordings firing.
++	 */
++	uint64_t hits = 0;
++	uint64_t enable = atomic_load(&st->ivs_zone_enable);
++
++	for (int i = 0; i < total && i < RSS_IVS_MAX_ROI && i < 64; i++)
++		if (mr->ret_roi[i])
++			hits |= (uint64_t)1 << i;
++	atomic_store(&st->ivs_zone_hits, hits);
++
++	if (enable) {
++		for (int i = 0; i < total && i < RSS_IVS_MAX_ROI && i < 64; i++)
++			if (!(enable & ((uint64_t)1 << i)))
++				mr->ret_roi[i] = 0;
++	}
++
+ 	/* Find bounding box of active zones in the grid */
+ 	int min_col = gx, max_col = -1, min_row = gy, max_row = -1;
+ 	for (int i = 0; i < total && i < RSS_IVS_MAX_ROI; i++) {
+@@ -473,6 +493,7 @@
+ 			pthread_mutex_lock(&st->ivs_det_lock);
+ 			st->ivs_detections.count = 0;
+ 			pthread_mutex_unlock(&st->ivs_det_lock);
++			atomic_store(&st->ivs_zone_hits, 0);
+ 			RSS_DEBUG("IVS: motion stopped");
+ 		}
+ 	}
+--- a/rvd/rvd_ctrl.c	2026-08-13 16:41:16.358187716 +0200
++++ b/rvd/rvd_ctrl.c	2026-08-13 16:42:10.602952601 +0200
+@@ -1129,9 +1129,34 @@
+ 		cJSON_AddBoolToObject(r, "persondet", st->ivs_persondet);
+ 		cJSON_AddNumberToObject(r, "persons", (double)persons);
+ 		cJSON_AddNumberToObject(r, "timestamp", (double)ts);
++		/* Grid geometry and per-zone state, so a UI can draw the zones. */
++		cJSON_AddNumberToObject(r, "grid_x", (double)st->ivs_grid_x);
++		cJSON_AddNumberToObject(r, "grid_y", (double)st->ivs_grid_y);
++		cJSON_AddNumberToObject(r, "zones", (double)st->ivs_roi_count);
++		cJSON_AddNumberToObject(r, "zone_hits",
++				        (double)atomic_load(&st->ivs_zone_hits));
++		cJSON_AddNumberToObject(r, "zone_enable",
++				        (double)atomic_load(&st->ivs_zone_enable));
+ 		return rss_ctrl_resp_json(resp, resp_size, r);
+ 	}
+ 
++	if (strcmp(cmd, "ivs-set-zones") == 0) {
++		/*
++		 * Bitmap of zones that may raise motion; 0 means "all enabled".
++		 * Runtime-settable so masking a zone in the UI takes effect without
++		 * restarting the pipeline.
++		 */
++		int mask = -1;
++		if (rss_json_get_int(cmd_json, "value", &mask) == 0 && mask >= 0) {
++			atomic_store(&st->ivs_zone_enable, (uint64_t)(unsigned)mask);
++			cJSON *r = cJSON_CreateObject();
++			cJSON_AddStringToObject(r, "status", "ok");
++			cJSON_AddNumberToObject(r, "zone_enable", (double)(unsigned)mask);
++			return rss_ctrl_resp_json(resp, resp_size, r);
++		}
++		return rss_ctrl_resp_error(resp, resp_size, "invalid mask");
++	}
++
+ 	if (strcmp(cmd, "ivs-detections") == 0) {
+ 		if (!atomic_load(&st->ivs_active)) {
+ 			return rss_ctrl_resp_error(resp, resp_size, "ivs not active");
