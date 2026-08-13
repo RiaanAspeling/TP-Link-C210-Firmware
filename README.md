@@ -21,6 +21,7 @@ ONVIF/RTSP software.
 | WebRTC preview in the stock web UI | ✅ |
 | Pan/tilt — web UI, ONVIF continuous (press-and-hold), absolute moves, presets | ✅ |
 | Motion detection — custom frame-difference detector (vendor IVS is broken) | ✅ |
+| Lean web UI — login, WebRTC live view (1080p/360p), smooth PTZ | ✅ |
 | IR-cut + automatic day/night (gain-based) | ✅ |
 | Wi-Fi setup, web UI, SSH | ✅ |
 
@@ -55,7 +56,7 @@ ONVIF/RTSP software.
 | `tree-overrides/` | Files overwritten in the upstream tree (package tweaks, patches) |
 | `scripts/build.sh` | Clone/pin upstream → apply layer → Docker build → image into `images/` |
 | `scripts/apply-layer.sh` | Apply this layer to an upstream tree (idempotent) |
-| `webui/` | Custom web UI (planned) |
+| `webui/` | Lean web UI pages (`login.html`, `index.html`) — copied to `/var/www` |
 | `images/`, `build/`, `firmware-dumps/` | Local only — gitignored |
 
 ## Build
@@ -204,6 +205,60 @@ parameter); a margin change only needs the daemon restarted.
 > Restarting only the daemon (`kill` its PID, then `start-stop-daemon -S -b -m -p
 > /run/motors-daemon.pid -x /usr/bin/motors-daemon -- -d -p`) is enough for a margin
 > change and avoids the module entirely.
+
+## Lean web UI
+
+Two hand-written pages in [`webui/`](webui/) — a login screen and a live view with
+PTZ — plus three CGIs in `overlay/var/www/x/`. Scope is deliberately **login, live
+view, pan/tilt**; everything else is done over SSH.
+
+Authentication is the stock one (`login.cgi` → `/etc/shadow` via `mkpasswd -m sha512`,
+cookie sessions in `/tmp/sessions`), so the pages inherit it by calling CGIs that
+already `require_auth`. First-boot Wi-Fi provisioning is untouched: it runs from a
+**separate docroot** (`/var/www-portal`, served when `S38wpa_supplicant` finds no
+`ssid=` and raises the `THINGINO-xx` AP), so replacing `/var/www` cannot strand a
+fresh camera.
+
+**Video is WebRTC, not MJPEG.** MJPEG was tried first and tops out at ~3 fps on this
+SoC — `[jpeg] fps = 20` measured *slower* than `fps = 10`, at 20 % CPU and load 4.4,
+so it is a hardware ceiling, not configuration. `x/mjpeg.cgi` remains as a fallback
+(the stock `x/ch*.mjpg` are dead here: they `exec prudyntctl`, which does not exist on
+a raptor build). The live view instead uses raptor's WHIP signalling with a
+1080p/360p selector.
+
+**PTZ drives the `ptz-glide` daemon**, not repeated `motors -d g` steps. Per that
+daemon's own notes, small relative moves are fork-rate limited to ~3/sec on this SoC
+and look jerky; writing intent to `/tmp/ptz_glide` gets one profiled accelerate-
+cruise-decelerate seek, identical to ONVIF.
+
+| CGI | Purpose |
+|---|---|
+| `x/ptz.cgi` | press-and-hold PTZ via `/tmp/ptz_glide`; parses its query string **without `eval`** |
+| `x/mjpeg.cgi` | same-origin MJPEG proxy for rhd (fallback preview) |
+| `x/webrtc-whip.cgi` | **override** of raptor's WHIP proxy — see below |
+
+### Why we override `webrtc-whip.cgi`
+
+Two defects in the stock file, both fixed in our copy:
+
+1. **It corrupted the SDP answer.** `sdp="$(cat "$body_file")"` — command substitution
+   strips trailing newlines, so rwd's final CRLF lost its LF. Chrome read the dangling
+   CR as line content and rejected the last `a=candidate` with *"Invalid SDP line"*.
+   Signalling succeeded (rwd logged `WHIP: session created`) and then ICE never
+   started, so the symptom was a black preview with no useful error.
+2. **It had no authentication at all** — while supplying the `[webrtc]` credentials to
+   rwd on the caller's behalf, so anyone who could reach the WebUI port could open a
+   video session anonymously.
+
+> Order matters when adding auth to a raptor CGI: `auth.sh` dereferences variables that
+> are unset on non-browser requests (`HTTP_ACCEPT`, `HTTP_COOKIE`). Under raptor's
+> `set -eu` the shell aborts before it can emit the 401, uhttpd sees an empty response
+> and returns a confusing **502**. Source `auth.sh` *before* `set -eu`.
+
+Still on the stock UI's shoulders for now: the remaining `/var/www` pages are installed
+and unused. Stripping `thingino-webui` (and vendoring the handful of CGIs we keep) is a
+separate step — worth ~139 KB compressed, measured, and deliberately not conflated with
+getting the pages working.
 
 ## Motion detection
 

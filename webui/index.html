@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Camera</title>
+<style>
+:root{--bg:#0f1115;--fg:#e6e8eb;--muted:#8b929c;--line:#2c3038;--accent:#3d7dff;--err:#ff6b6b;--ok:#3ddc84}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
+     font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+
+/* Video fills the viewport; everything else floats on top of it. */
+#stage{position:fixed;inset:0;background:#000}
+#v{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+
+.bar{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:10px;
+     padding:10px 14px;background:linear-gradient(#000c,#0000);z-index:3}
+.bar h1{margin:0;font-size:14px;font-weight:600;letter-spacing:.2px}
+.bar .sp{flex:1}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.dot.live{background:var(--ok)}
+.dot.bad{background:var(--err)}
+#state{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+/* One control style across the bar, the pad and the HUD. */
+.bar a,.bar button,.bar select{
+  display:inline-block;background:#1e2127cc;color:var(--fg);border:1px solid var(--line);
+  border-radius:8px;padding:6px 12px;font-size:12px;line-height:1.2;font-family:inherit;
+  cursor:pointer;text-decoration:none;backdrop-filter:blur(6px)}
+.bar a:hover,.bar button:hover,.bar select:hover{border-color:#3f4650}
+.bar a:active,.bar button:active{background:var(--accent);border-color:var(--accent)}
+
+/* PTZ pad, bottom-right over the video */
+#pad{position:fixed;right:18px;bottom:18px;z-index:3;
+     display:grid;grid-template-columns:repeat(3,54px);grid-template-rows:repeat(3,54px);gap:6px}
+#pad button{background:#1e2127cc;color:var(--fg);border:1px solid var(--line);border-radius:10px;
+            font-size:18px;cursor:pointer;user-select:none;-webkit-user-select:none;
+            touch-action:none;backdrop-filter:blur(6px)}
+#pad button:active{background:var(--accent);border-color:var(--accent)}
+#pad .mid{font-size:11px;letter-spacing:.4px}
+
+/* status + secondary actions, bottom-left */
+#hud{position:fixed;left:18px;bottom:18px;z-index:3;display:flex;flex-direction:column;gap:8px;
+     font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+#hud .row{display:flex;gap:6px;align-items:center}
+#hud button{background:#1e2127cc;color:var(--fg);border:1px solid var(--line);border-radius:8px;
+            padding:7px 12px;font-size:12px;cursor:pointer;backdrop-filter:blur(6px)}
+#hud button:active{background:var(--accent);border-color:var(--accent)}
+#pos b{color:var(--fg);font-weight:600}
+
+#msg{position:fixed;inset:0;display:none;place-items:center;z-index:2;color:var(--muted);font-size:13px}
+#msg.show{display:grid}
+@media (max-width:560px){
+  #pad{grid-template-columns:repeat(3,48px);grid-template-rows:repeat(3,48px);right:10px;bottom:10px}
+  #hud{left:10px;bottom:10px}
+}
+</style>
+</head>
+<body>
+<div id="stage"><video id="v" autoplay playsinline muted></video></div>
+<div id="msg">Connecting…</div>
+
+<div class="bar">
+  <span class="dot" id="dot"></span>
+  <h1>Camera</h1>
+  <span id="state"></span>
+  <span class="sp"></span>
+  <select id="quality" title="Video stream">
+    <option value="0">1080p</option>
+    <option value="1">360p</option>
+  </select>
+  <button id="reconnect" title="Reconnect the video stream">Reconnect</button>
+  <a href="#" id="logout">Sign out</a>
+</div>
+
+<div id="pad">
+  <span></span>
+  <button data-sx="0"  data-sy="1"  aria-label="Tilt up">&#9650;</button>
+  <span></span>
+  <button data-sx="-1" data-sy="0"  aria-label="Pan left">&#9664;</button>
+  <button class="mid" id="stop" aria-label="Stop">STOP</button>
+  <button data-sx="1"  data-sy="0"  aria-label="Pan right">&#9654;</button>
+  <span></span>
+  <button data-sx="0"  data-sy="-1" aria-label="Tilt down">&#9660;</button>
+  <span></span>
+</div>
+
+<div id="hud">
+  <span id="pos">pan <b id="px">–</b> · tilt <b id="py">–</b></span>
+  <div class="row">
+    <button id="centre">Centre</button>
+    <button id="home">Re-home</button>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const v=$('v'), dot=$('dot'), state=$('state'), msg=$('msg');
+
+/* ---------- PTZ ----------------------------------------------------------
+   Press-and-hold writes an intent to the ptz-glide daemon (the same one the
+   ONVIF path uses). The motor runs a single profiled seek and glides until we
+   send the stop, so motion is smooth. Sending repeated relative steps instead
+   is fork-rate limited on this SoC (~3/s) and looks jerky. */
+let held=null;
+async function glide(sx,sy,e){
+  try{
+    const r=await fetch(`/x/ptz.cgi?sx=${sx}&sy=${sy}&e=${e}`,{cache:'no-store'});
+    if(r.status===401||r.status===403){location.replace('/login.html');return;}
+  }catch(_){}
+}
+function press(sx,sy){ if(held)return; held=[sx,sy]; glide(sx,sy,1); }
+function release(){ if(!held)return; held=null; glide(0,0,0); poll(); }
+
+for(const b of document.querySelectorAll('#pad button[data-sx]')){
+  const sx=+b.dataset.sx, sy=+b.dataset.sy;
+  b.addEventListener('pointerdown',e=>{e.preventDefault();b.setPointerCapture(e.pointerId);press(sx,sy);});
+  b.addEventListener('pointerup',release);
+  b.addEventListener('pointercancel',release);
+  b.addEventListener('lostpointercapture',release);
+}
+window.addEventListener('blur',release);
+
+/* absolute/one-shot commands still go through the motors CGI */
+async function motor(q){
+  const r=await fetch('/x/json-motor.cgi?'+q,{cache:'no-store'});
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  const j=await r.json().catch(()=>null);
+  return j&&j.message?j.message:null;
+}
+function showPos(m){ if(m){$('px').textContent=m.xpos; $('py').textContent=m.ypos;} }
+async function poll(){ showPos(await motor('d=j')); }
+
+$('stop').onclick   =async()=>{release(); showPos(await motor('d=s'));};
+$('centre').onclick =async()=>showPos(await motor('d=b'));
+$('home').onclick   =async()=>{ if(confirm('Re-home drives both axes into their end stops. Continue?'))
+                                 showPos(await motor('d=r')); };
+$('logout').onclick =e=>{e.preventDefault();document.cookie='session=; Max-Age=0; path=/';
+                         location.replace('/login.html');};
+
+/* ---------- Video (WebRTC) ------------------------------------------------
+   MJPEG was tried first and tops out near 3 fps on this SoC regardless of the
+   [jpeg] fps setting, so the live view uses WebRTC via raptor's same-origin
+   WHIP proxy. Stream is selectable: 0 = main 1080p, 1 = sub 640x360. */
+let pc=null, resource=null;
+function setState(t,cls){ state.textContent=t; dot.className='dot'+(cls?' '+cls:''); }
+
+/* Stream choice: 0 = main (1080p), 1 = sub (640x360). Remembered per browser.
+   Switching requires a fresh PeerConnection, so just reconnect. */
+const QKEY='cam.stream', quality=$('quality');
+quality.value=localStorage.getItem(QKEY)||'0';
+quality.onchange=()=>{ localStorage.setItem(QKEY,quality.value); connect(); };
+
+async function connect(){
+  await disconnect();
+  setState('connecting','');
+  msg.textContent='Connecting…'; msg.classList.add('show');
+  try{
+    pc=new RTCPeerConnection({iceServers:[],bundlePolicy:'max-bundle'});
+    // Offer BOTH m-lines. rwd answers with audio+video, and setRemoteDescription
+    // throws on an m-line count/order mismatch if we only offered video.
+    // sendrecv on audio matches raptor's own client and leaves the two-way
+    // backchannel available later; we simply never attach a local track.
+    pc.addTransceiver('video',{direction:'recvonly'});
+    pc.addTransceiver('audio',{direction:'sendrecv'});
+    pc.ontrack=e=>{
+      if(!v.srcObject)v.srcObject=new MediaStream();
+      v.srcObject.addTrack(e.track);
+      v.play().catch(()=>{});
+      msg.classList.remove('show');
+    };
+    pc.oniceconnectionstatechange=()=>{
+      const s=pc.iceConnectionState;
+      if(s==='connected'||s==='completed'){setState('live','live');msg.classList.remove('show');}
+      else if(s==='failed'||s==='disconnected'){setState(s,'bad');
+        msg.textContent='Stream lost — press Reconnect';msg.classList.add('show');}
+      else setState(s,'');
+    };
+    const offer=await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await new Promise(r=>{
+      if(pc.iceGatheringState==='complete')return r();
+      pc.onicegatheringstatechange=()=>{if(pc.iceGatheringState==='complete')r();};
+      setTimeout(r,1500);            // don't stall forever on a slow gather
+    });
+    const resp=await fetch('/x/webrtc-whip.cgi?stream='+quality.value,{
+      method:'POST',cache:'no-store',
+      headers:{'Content-Type':'application/sdp'},
+      body:pc.localDescription.sdp
+    });
+    if(resp.status===401||resp.status===403){location.replace('/login.html');return;}
+    if(!resp.ok){setState('error '+resp.status,'bad');
+      msg.textContent='Stream unavailable ('+resp.status+')';msg.classList.add('show');return;}
+    resource=resp.headers.get('Location');
+    let sdp=await resp.text();
+    // Belt and braces: an SDP whose last line lacks its terminator makes Chrome
+    // reject the final a=candidate with "Invalid SDP line". Our webrtc-whip.cgi
+    // override passes the body through byte-exactly, but a stock CGI would not.
+    if(!sdp.endsWith('\n')) sdp+='\r\n';
+    await pc.setRemoteDescription({type:'answer',sdp});
+  }catch(err){
+    // Surface the actual reason — a bare "error" is undiagnosable.
+    setState('error','bad');
+    msg.textContent='Stream error: '+(err&&err.message?err.message:err);
+    msg.classList.add('show');
+    console.error('[webrtc]',err);
+  }
+}
+async function disconnect(){
+  if(resource){try{await fetch(new URL(resource,location.href).href,{method:'DELETE'});}catch(_){}}
+  if(pc)pc.close();
+  pc=null;resource=null;v.srcObject=null;
+}
+$('reconnect').onclick=connect;
+window.addEventListener('pagehide',disconnect);
+
+connect();
+poll();
+setInterval(poll,2000);
+</script>
+</body>
+</html>

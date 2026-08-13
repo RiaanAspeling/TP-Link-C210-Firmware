@@ -24,6 +24,14 @@ cp -av "$REPO/overlay/." "$THINGINO_DIR/overlay/"
 # 3. tree overrides (package edits carried as full-file overwrites)
 cp -av "$REPO/tree-overrides/." "$THINGINO_DIR/"
 
+# 3b. lean WebUI pages -> /var/www. Kept in webui/ rather than under overlay/ so
+# the hand-written pages are easy to find; the CGIs they call live in
+# overlay/var/www/x/. These overwrite the stock thingino-webui index/login,
+# which is deliberate — the rest of the stock UI is still installed for now.
+mkdir -p "$THINGINO_DIR/overlay/var/www"
+cp -av "$REPO/webui/." "$THINGINO_DIR/overlay/var/www/"
+rm -f "$THINGINO_DIR/overlay/var/www/.gitkeep"
+
 # 4. board-defconfig RMEM override (idempotent).
 # thingino.mk captures ISP_RMEM_MB := $(BR2_THINGINO_RMEM_MB) as an immediate
 # make value from the BOARD defconfig, BEFORE local.fragment is merged — so an
@@ -45,5 +53,8 @@ chmod 0755 "$THINGINO_DIR/overlay/etc/init.d/S59motor" \
            "$THINGINO_DIR/overlay/etc/init.d/S61ptz-glide" \
            "$THINGINO_DIR/overlay/usr/sbin/daynight" \
            "$THINGINO_DIR/overlay/usr/sbin/ptz-glide" 2>/dev/null || true
+
+# CGIs must be executable or uhttpd serves them as plain text
+chmod 0755 "$THINGINO_DIR"/overlay/var/www/x/*.cgi 2>/dev/null || true
 
 echo "== layer applied"
