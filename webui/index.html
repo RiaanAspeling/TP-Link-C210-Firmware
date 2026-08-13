@@ -49,11 +49,32 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #hud button:active{background:var(--accent);border-color:var(--accent)}
 #pos b{color:var(--fg);font-weight:600}
 
+/* preset bar, bottom-centre between the HUD and the pad */
+#presets{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:3;
+         display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;
+         max-width:min(52vw,520px)}
+#presets .chip{display:flex;align-items:center;gap:6px;background:#1e2127cc;color:var(--fg);
+               border:1px solid var(--line);border-radius:999px;padding:6px 6px 6px 12px;
+               font-size:12px;cursor:pointer;backdrop-filter:blur(6px);white-space:nowrap}
+#presets .chip:hover{border-color:#3f4650}
+#presets .chip:active{background:var(--accent);border-color:var(--accent)}
+#presets .chip .x{opacity:.35;font-size:14px;line-height:1;padding:0 4px;border-radius:50%}
+#presets .chip .x:hover{opacity:1;color:var(--err)}
+#presets .add{background:#1e2127cc;color:var(--muted);border:1px dashed var(--line);
+              border-radius:999px;padding:6px 12px;font-size:12px;cursor:pointer;
+              backdrop-filter:blur(6px)}
+#presets .add:hover{color:var(--fg);border-color:#3f4650}
+#presets input{background:#15171c;color:var(--fg);border:1px solid var(--accent);
+               border-radius:999px;padding:6px 12px;font-size:12px;width:130px;font-family:inherit}
+#presets input:focus{outline:none}
+
 #msg{position:fixed;inset:0;display:none;place-items:center;z-index:2;color:var(--muted);font-size:13px}
 #msg.show{display:grid}
 @media (max-width:560px){
   #pad{grid-template-columns:repeat(3,48px);grid-template-rows:repeat(3,48px);right:10px;bottom:10px}
   #hud{left:10px;bottom:10px}
+  /* on narrow screens the pad and HUD own the bottom row — float presets above them */
+  #presets{bottom:auto;top:56px;max-width:94vw}
 }
 </style>
 </head>
@@ -85,6 +106,8 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
   <button data-sx="0"  data-sy="-1" aria-label="Tilt down">&#9660;</button>
   <span></span>
 </div>
+
+<div id="presets"></div>
 
 <div id="hud">
   <span id="pos">pan <b id="px">–</b> · tilt <b id="py">–</b></span>
@@ -138,6 +161,66 @@ $('home').onclick   =async()=>{ if(confirm('Re-home drives both axes into their 
                                  showPos(await motor('d=r')); };
 $('logout').onclick =e=>{e.preventDefault();document.cookie='session=; Max-Age=0; path=/';
                          location.replace('/login.html');};
+
+/* ---------- Presets -------------------------------------------------------
+   Backed by /sbin/ptz_presets, the same store ONVIF uses — so presets saved
+   here show up in iSpy and IP Cam Viewer, and theirs show up here. */
+const presetBar=$('presets');
+let naming=false;
+
+async function presetApi(qs){
+  const r=await fetch('/x/presets.cgi?'+qs,{cache:'no-store'});
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
+}
+function renderPresets(list){
+  presetBar.textContent='';
+  for(const p of list){
+    const chip=document.createElement('span');
+    chip.className='chip';
+    chip.title=`Go to ${p.name} (pan ${p.x}, tilt ${p.y})`;
+    const label=document.createElement('span');
+    label.textContent=p.name;
+    label.onclick=async()=>{ const j=await presetApi('a=goto&n='+p.n); if(j&&j.pos)showPos(j.pos); poll(); };
+    const del=document.createElement('span');
+    del.className='x'; del.textContent='×'; del.title='Delete this preset';
+    del.onclick=async e=>{ e.stopPropagation();
+      const j=await presetApi('a=del&n='+p.n); if(j&&j.presets)renderPresets(j.presets); };
+    chip.append(label,del);
+    presetBar.append(chip);
+  }
+  if(!naming){
+    const add=document.createElement('button');
+    add.className='add'; add.textContent='+ Save position';
+    add.title='Save the current pan/tilt position as a preset';
+    add.onclick=startNaming;
+    presetBar.append(add);
+  }
+}
+function startNaming(){
+  naming=true;
+  const input=document.createElement('input');
+  input.placeholder='Preset name…'; input.maxLength=20;
+  const finish=async save=>{
+    if(!naming)return;
+    naming=false;
+    const name=input.value.trim();
+    if(save&&name){
+      const j=await presetApi('a=save&n=-1&name='+encodeURIComponent(name));
+      if(j&&j.presets){renderPresets(j.presets);return;}
+    }
+    loadPresets();
+  };
+  input.onkeydown=e=>{ if(e.key==='Enter')finish(true); else if(e.key==='Escape')finish(false); };
+  input.onblur=()=>finish(true);
+  presetBar.querySelector('.add')?.remove();
+  presetBar.append(input);
+  input.focus();
+}
+async function loadPresets(){
+  const j=await presetApi('a=list');
+  if(j&&j.presets)renderPresets(j.presets);
+}
 
 /* ---------- Video (WebRTC) ------------------------------------------------
    MJPEG was tried first and tops out near 3 fps on this SoC regardless of the
@@ -217,6 +300,7 @@ window.addEventListener('pagehide',disconnect);
 
 connect();
 poll();
+loadPresets();
 setInterval(poll,2000);
 </script>
 </body>
