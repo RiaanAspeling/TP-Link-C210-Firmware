@@ -26,8 +26,8 @@ cp -av "$REPO/tree-overrides/." "$THINGINO_DIR/"
 
 # 3b. lean WebUI pages -> /var/www. Kept in webui/ rather than under overlay/ so
 # the hand-written pages are easy to find; the CGIs they call live in
-# overlay/var/www/x/. These overwrite the stock thingino-webui index/login,
-# which is deliberate — the rest of the stock UI is still installed for now.
+# overlay/var/www/x/. These overwrite the stock thingino-webui index/login; the
+# rest of the stock UI is then deleted from the image by scripts/lean-prune.sh.
 mkdir -p "$THINGINO_DIR/overlay/var/www"
 cp -av "$REPO/webui/." "$THINGINO_DIR/overlay/var/www/"
 rm -f "$THINGINO_DIR/overlay/var/www/.gitkeep"
@@ -56,5 +56,8 @@ chmod 0755 "$THINGINO_DIR/overlay/etc/init.d/S59motor" \
 
 # CGIs must be executable or uhttpd serves them as plain text
 chmod 0755 "$THINGINO_DIR"/overlay/var/www/x/*.cgi 2>/dev/null || true
+
+# post-fakeroot image prune (referenced from local.fragment)
+chmod 0755 "$THINGINO_DIR/scripts/lean-prune.sh" 2>/dev/null || true
 
 echo "== layer applied"

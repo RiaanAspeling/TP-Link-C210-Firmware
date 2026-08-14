@@ -204,7 +204,7 @@ window.addEventListener('blur',release);
 
 /* absolute/one-shot commands still go through the motors CGI */
 async function motor(q){
-  const r=await fetch('/x/json-motor.cgi?'+q,{cache:'no-store'});
+  const r=await fetch('/x/motors.cgi?'+q,{cache:'no-store'});
   if(r.status===401||r.status===403){location.replace('/login.html');return null;}
   const j=await r.json().catch(()=>null);
   return j&&j.message?j.message:null;

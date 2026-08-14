@@ -46,3 +46,18 @@ BR2_PACKAGE_THINGINO_RAPTOR_RMD=y
 # BR2_PACKAGE_THINGINO_RAPTOR_RMR is not set
 # BR2_PACKAGE_THINGINO_RAPTOR_RSP is not set
 # BR2_PACKAGE_THINGINO_RAPTOR_WEBTORRENT is not set
+
+# =====================================================================
+# LEAN STRIP — Pass 3 (2026-08-14): prune what the config can't drop.
+#
+# thingino-webui cannot simply be turned off: it also provides the session
+# layer (auth.sh, session.sh, login.cgi) that our pages and the ONVIF service
+# both depend on. And Buildroot never prunes target/ on package removal, so
+# libjzdl lingers from back when IVS_DETECT was enabled. Both are handled by a
+# post-fakeroot script, which edits a throwaway copy of target/ rather than the
+# real one — see scripts/lean-prune.sh.
+#
+# Upstream leaves POST_FAKEROOT empty (it uses POST_BUILD for rootfs_script.sh),
+# so claiming this hook does not override anything.
+# =====================================================================
+BR2_ROOTFS_POST_FAKEROOT_SCRIPT="$(BR2_EXTERNAL_THINGINO_PATH)/scripts/lean-prune.sh"

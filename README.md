@@ -46,6 +46,8 @@ ONVIF/RTSP software.
   smooth press-and-hold glide; the daemon is the sole motor-command writer.
 - **Motion detection** — this SoC's vendor IVS algorithms are broken, so raptor carries
   a patch adding our own frame-difference detector. See [Motion detection](#motion-detection).
+- **Image prune** — the stock web UI pages and a stale 609 KB `libjzdl.m.so` are deleted
+  from the packed image by a post-fakeroot script. See [Image prune](#image-prune).
 
 ## Layout
 
@@ -54,6 +56,7 @@ ONVIF/RTSP software.
 | `user/<board>/` | Board layer: `local.fragment` (defconfig), `thingino.json` (runtime config) |
 | `overlay/` | Files copied into the rootfs (gpio, day/night, init scripts, raptor.conf) |
 | `tree-overrides/` | Files overwritten in the upstream tree (package tweaks, patches) |
+| `tree-overrides/scripts/lean-prune.sh` | Post-fakeroot [image prune](#image-prune) — runs on a copy, not on `target/` |
 | `scripts/build.sh` | Clone/pin upstream → apply layer → Docker build → image into `images/` |
 | `scripts/apply-layer.sh` | Apply this layer to an upstream tree (idempotent) |
 | `webui/` | Lean web UI pages (`login.html`, `index.html`) — copied to `/var/www` |
@@ -209,8 +212,10 @@ parameter); a margin change only needs the daemon restarted.
 ## Lean web UI
 
 Two hand-written pages in [`webui/`](webui/) — a login screen and a live view with
-PTZ — plus three CGIs in `overlay/var/www/x/`. Scope is deliberately **login, live
-view, pan/tilt**; everything else is done over SSH.
+PTZ — plus the CGIs in `overlay/var/www/x/`. Scope is deliberately **login, live
+view, pan/tilt**; everything else is done over SSH. The stock thingino pages are
+deleted from the image, so these are the whole UI — see
+[Image prune](#image-prune).
 
 Authentication is the stock one (`login.cgi` → `/etc/shadow` via `mkpasswd -m sha512`,
 cookie sessions in `/tmp/sessions`), so the pages inherit it by calling CGIs that
@@ -234,6 +239,7 @@ cruise-decelerate seek, identical to ONVIF.
 | CGI | Purpose |
 |---|---|
 | `x/ptz.cgi` | press-and-hold PTZ via `/tmp/ptz_glide`; parses its query string **without `eval`** |
+| `x/motors.cgi` | one-shot commands (status, stop, centre, home); replaces stock `json-motor.cgi` |
 | `x/presets.cgi` | PTZ presets via `/sbin/ptz_presets` — the store ONVIF uses |
 | `x/motion.cgi` | motion state, zone bitmap, zone mask |
 | `x/video.cgi` | frame rate / bitrate: applies live and persists to `raptor.conf` |
@@ -276,10 +282,50 @@ Two defects in the stock file, both fixed in our copy:
 > `set -eu` the shell aborts before it can emit the 401, uhttpd sees an empty response
 > and returns a confusing **502**. Source `auth.sh` *before* `set -eu`.
 
-Still on the stock UI's shoulders for now: the remaining `/var/www` pages are installed
-and unused. Stripping `thingino-webui` (and vendoring the handful of CGIs we keep) is a
-separate step — worth ~139 KB compressed, measured, and deliberately not conflated with
-getting the pages working.
+## Image prune
+
+`mtd4` (rootfs) is `0x520000` = 5,373,952 bytes, and the build had ~112 KB of headroom.
+Two things were wasting most of it, and **neither can be dropped by config alone**:
+
+- **The stock web UI.** `thingino-webui` also ships the session layer our pages depend
+  on — `auth.sh`, `session.sh`, `login.cgi` — and `onvif.cgi` sources `auth.sh` too. So
+  the package has to stay; only its pages can go.
+- **`libjzdl.m.so` (609 KB).** `BR2_PACKAGE_INGENIC_LIB_JZDL` is *not* set, but Buildroot
+  never prunes `target/` on package removal, so the file lingered from back when
+  `IVS_DETECT` was enabled and was silently packed into every image since.
+
+[`scripts/lean-prune.sh`](tree-overrides/scripts/lean-prune.sh) handles both, as
+`BR2_ROOTFS_POST_FAKEROOT_SCRIPT`. That hook is the right one:
+
+> `fs/common.mk` rsyncs `target/` into a throwaway directory and **rebinds `TARGET_DIR`
+> to the copy** before running the script, then deletes the copy. Deletions therefore
+> affect the packed image only — the real `target/` is never touched, nothing goes
+> stale, and no `CLEAN=1` is needed to undo a change. Use `$1`, not `$TARGET_DIR`:
+> Buildroot exports the latter globally and it still points at the real tree.
+
+Upstream leaves `POST_FAKEROOT` empty (it uses `POST_BUILD` for `rootfs_script.sh`), so
+claiming the hook overrides nothing.
+
+The prune is **deny-by-default**: `/var/www` is rebuilt from a keep list, so a page added
+by a future upstream package is dropped unless it is named. With ~100 KB of headroom a
+silent addition would otherwise blow the partition at pack time with a far less obvious
+error. The script asserts every file the UI needs still exists and fails the build if not
+— a typo in the keep list would otherwise ship a firmware whose login page 404s, and the
+camera is a flash cycle away from being testable.
+
+What survives in `/var/www`: our `index.html` and `login.html`; `onvif/` untouched; and in
+`x/`, the session plumbing, `ch0.jpg`/`ch1.jpg` (named as the ONVIF snapshot URIs), the
+uhttpd `-E` handler, `reboot.cgi`, and our seven CGIs.
+
+Dropping the `json-*.cgi` family also removes most of the stock UI's `eval $QUERY_STRING`
+surface, including `run.cgi` (arbitrary command execution) and `texteditor.cgi`. Our
+`x/motors.cgi` exists so `json-motor.cgi` — the last one our pages still called — could go
+with them.
+
+> `/var/www/index.cgi` is dead on this build and is pruned: uhttpd's CGI prefix is `/x`,
+> so it is served as plain text rather than executed, and `/` is served straight from
+> `index.html`. Note this also means the UI *shell* loads unauthenticated; every CGI it
+> calls still requires a session, so the page just bounces to `/login.html`.
 
 ## Motion detection
 
@@ -358,6 +404,13 @@ cell toggles it out of the mask.
   run the daemon from there. Nothing touches flash and a reboot restores the image.
 - `pkill -x` silently fails on process names longer than 15 characters (`comm`
   truncation) — kill by PID.
+- **Files hand-copied to the camera during development outlive the next flash.** `/` is
+  overlayfs (`lowerdir=/` on the squashfs, `upperdir=/overlay` on jffs2), so anything
+  written at runtime lands in `/overlay` and **shadows** the flashed version forever.
+  After the prune this shipped an `index.html` calling a CGI that no longer existed. To
+  check, compare `/overlay/var/www/...` against `/rom/var/www/...`; delete the upper copy
+  and **reboot** — this kernel's overlayfs caches dentries and will not notice an edit
+  made directly to `upperdir` on a mounted filesystem.
 
 ## Credits
 
