@@ -2,6 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>/* Force the login onto TLS before the password can be typed: over http it
+   would cross the LAN as base64 (== cleartext). Scoped to the WebUI on purpose —
+   ONVIF/RTSP/snapshot stay on http because their clients can't accept the
+   self-signed cert (a browser can). The protocol check makes this a one-shot,
+   so no redirect loop. Assumes S02ssl produced a cert; in the rare http-only
+   fallback there is no :443 to reach and access is via SSH. */
+if(location.protocol==='http:')location.replace('https://'+location.host+location.pathname+location.search+location.hash);</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in</title>
 <style>

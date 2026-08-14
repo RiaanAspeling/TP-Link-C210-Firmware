@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>/* Keep the app on TLS (the OTA page needs crypto.subtle, which only exists
+   in a secure context, and the session cookie shouldn't ride http). One-shot via
+   the protocol check; ONVIF/RTSP/snapshot are unaffected. See login.html. */
+if(location.protocol==='http:')location.replace('https://'+location.host+location.pathname+location.search+location.hash);</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Camera</title>
 <style>
@@ -79,6 +83,33 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #videopanel .note{margin:0;font-size:11px;line-height:1.4;color:var(--muted)}
 #videopanel .note em{color:var(--fg);font-style:normal}
 
+/* system / OTA popover — same shell as the video one, a touch wider */
+#syspanel{position:fixed;top:48px;right:14px;z-index:4;width:290px;
+          background:#1e2127f2;border:1px solid var(--line);border-radius:10px;
+          padding:14px;backdrop-filter:blur(8px);
+          display:flex;flex-direction:column;gap:11px}
+#syspanel[hidden]{display:none}
+#syspanel h2{margin:0;font-size:11px;font-weight:600;color:var(--muted);
+             text-transform:uppercase;letter-spacing:.5px}
+#syspanel .note{margin:0;font-size:11px;line-height:1.4;color:var(--muted)}
+#syspanel .note em{color:var(--fg);font-style:normal}
+#syspanel .warn{color:var(--err)}
+#syspanel input[type=file]{font-size:12px;color:var(--muted);width:100%}
+#syspanel input[type=file]::file-selector-button{
+  background:#15171c;color:var(--fg);border:1px solid var(--line);border-radius:6px;
+  padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;margin-right:8px}
+#syspanel .info{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;
+                line-height:1.4;min-height:1.4em}
+#syspanel .info b{color:var(--fg);font-weight:600}
+#syspanel label.chk{flex-direction:row;align-items:center;gap:8px;text-transform:none;
+                    letter-spacing:0;color:var(--err);font-size:12px;cursor:pointer}
+#syspanel button.act{background:#15171c;color:var(--fg);border:1px solid var(--line);
+                     border-radius:8px;padding:9px;font-size:13px;font-family:inherit;cursor:pointer}
+#syspanel button.act:hover:not(:disabled){border-color:#3f4650}
+#syspanel button.act:disabled{opacity:.45;cursor:default}
+#syspanel button.act.go{border-color:var(--accent)}
+#syspanel button.act.danger{border-color:var(--err);color:var(--err)}
+
 /* preset bar, bottom-centre between the HUD and the pad */
 #presets{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:3;
          display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;
@@ -100,11 +131,24 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 
 #msg{position:fixed;inset:0;display:none;place-items:center;z-index:2;color:var(--muted);font-size:13px}
 #msg.show{display:grid}
+
+/* Auto-hiding chrome: the top bar and the bottom controls slide off unless the
+   cursor is near that edge (video-player style). JS toggles body.show-top /
+   body.show-bot by pointer proximity; an open top panel or a held PTZ pins them.
+   #presets keeps its translateX(-50%) centring in both states. */
+.bar,#pad,#hud,#presets{transition:transform .28s ease,opacity .28s ease}
+body:not(.show-top) .bar{transform:translateY(-115%);opacity:0;pointer-events:none}
+body:not(.show-bot) #pad{transform:translateY(calc(100% + 28px));opacity:0;pointer-events:none}
+body:not(.show-bot) #hud{transform:translateY(calc(100% + 28px));opacity:0;pointer-events:none}
+body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity:0;pointer-events:none}
+
 @media (max-width:560px){
   #pad{grid-template-columns:repeat(3,48px);grid-template-rows:repeat(3,48px);right:10px;bottom:10px}
   #hud{left:10px;bottom:10px}
   /* on narrow screens the pad and HUD own the bottom row — float presets above them */
   #presets{bottom:auto;top:56px;max-width:94vw}
+  /* presets live at the top here, so hide them upward instead of downward */
+  body:not(.show-bot) #presets{transform:translate(-50%,calc(-100% - 60px))}
 }
 </style>
 </head>
@@ -120,6 +164,7 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
   <button id="sound">Sound: off</button>
   <button id="zones" title="Show motion zones; click again to edit the mask">Zones</button>
   <button id="videobtn" title="Stream, frame rate and bitrate">Video ▾</button>
+  <button id="sysbtn" title="Firmware update">System ▾</button>
   <button id="reconnect" title="Reconnect the video stream">Reconnect</button>
   <a href="#" id="logout">Sign out</a>
 </div>
@@ -164,6 +209,20 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
      RTSP, ONVIF, recordings — and are saved. The stream choice is only for this browser.</p>
 </div>
 
+<div id="syspanel" hidden>
+  <h2>Firmware update</h2>
+  <input type="file" id="otafile" accept=".bin,.squashfs,application/octet-stream">
+  <div class="info" id="otainfo">Choose a <b>rootfs.squashfs</b> (recommended) or a full <b>.bin</b>.</div>
+  <label class="chk" id="otafullwrap" hidden>
+    <input type="checkbox" id="otafull">
+    Full image — rewrites the bootloader. Can brick the camera.
+  </label>
+  <button class="act go" id="otago" disabled>Update firmware</button>
+  <p class="note" id="otanote">The image is checksummed in your browser and re-checked on the
+     camera before anything is written. A rootfs update keeps your wifi and password; the
+     camera reboots on its own. <em class="warn">Do not cut power during the update.</em></p>
+</div>
+
 <div id="presets"></div>
 
 <div id="hud">
@@ -190,8 +249,8 @@ async function glide(sx,sy,e){
     if(r.status===401||r.status===403){location.replace('/login.html');return;}
   }catch(_){}
 }
-function press(sx,sy){ if(held)return; held=[sx,sy]; glide(sx,sy,1); }
-function release(){ if(!held)return; held=null; glide(0,0,0); poll(); }
+function press(sx,sy){ if(held)return; held=[sx,sy]; glide(sx,sy,1); reveal(); }
+function release(){ if(!held)return; held=null; glide(0,0,0); poll(); reveal(); }
 
 for(const b of document.querySelectorAll('#pad button[data-sx]')){
   const sx=+b.dataset.sx, sy=+b.dataset.sy;
@@ -376,13 +435,25 @@ const fpsSel=$('fps'), brSel=$('bitrate');
 quality.value=localStorage.getItem(QKEY)||'0';
 quality.onchange=()=>{ localStorage.setItem(QKEY,quality.value); loadVideoSettings(); connect(); };
 
+const sysPanel=$('syspanel');
 $('videobtn').onclick=e=>{
   e.stopPropagation();
+  sysPanel.hidden=true;
   panel.hidden=!panel.hidden;
   if(!panel.hidden)loadVideoSettings();
+  reveal();
+};
+$('sysbtn').onclick=e=>{
+  e.stopPropagation();
+  panel.hidden=true;
+  sysPanel.hidden=!sysPanel.hidden;
+  reveal();
 };
 document.addEventListener('click',e=>{
   if(!panel.hidden && !panel.contains(e.target))panel.hidden=true;
+  // Don't fold the system panel mid-update, or the file choice and progress
+  // vanish on the first stray click.
+  if(!sysPanel.hidden && !sysPanel.contains(e.target) && !otaBusy)sysPanel.hidden=true;
 });
 
 function nearestOption(sel,val){
@@ -494,6 +565,138 @@ async function disconnect(){
 }
 $('reconnect').onclick=connect;
 window.addEventListener('pagehide',disconnect);
+
+/* ---------- Auto-hiding chrome --------------------------------------------
+   The top bar and the bottom controls (pad, HUD, presets) slide off-screen
+   unless the pointer is near that edge — like a video player. An open top
+   panel keeps the bar; a held PTZ button keeps the bottom controls, so they
+   never vanish mid-interaction. Touch has no hover, so a tap reveals both and
+   they retract after a few seconds. reveal() is a hoisted declaration, so the
+   PTZ and panel handlers above can call it. */
+const REVEAL_TOP=96, REVEAL_BOT=210;
+let lastPointerY=0, chromeTouchTimer=null;
+function reveal(){
+  const H=window.innerHeight;
+  const keepTop = lastPointerY<REVEAL_TOP || !panel.hidden || !sysPanel.hidden;
+  const keepBot = lastPointerY>H-REVEAL_BOT || !!held;
+  document.body.classList.toggle('show-top', keepTop);
+  document.body.classList.toggle('show-bot', keepBot);
+}
+window.addEventListener('mousemove', e=>{ lastPointerY=e.clientY; reveal(); });
+// Cursor leaving the window == not near either edge: retract (unless pinned).
+document.addEventListener('mouseleave', ()=>{ lastPointerY=window.innerHeight/2; reveal(); });
+window.addEventListener('touchstart', ()=>{
+  document.body.classList.add('show-top','show-bot');
+  clearTimeout(chromeTouchTimer);
+  chromeTouchTimer=setTimeout(()=>{ lastPointerY=window.innerHeight/2; reveal(); }, 3000);
+}, {passive:true});
+// Show both briefly on load so the controls are discoverable, then settle.
+document.body.classList.add('show-top','show-bot');
+lastPointerY=window.innerHeight/2;
+setTimeout(reveal, 2600);
+
+/* ---------- OTA firmware update ------------------------------------------
+   The heavy lifting is /usr/sbin/sysupgrade on the camera (stops services,
+   flashes from a RAM-resident stage2, reboots). Here we only: hash the file in
+   the browser, detect its type from the leading magic, POST the raw bytes, and
+   wait for the camera to come back. crypto.subtle needs a secure context — the
+   UI is always HTTPS, so it's available.
+
+   Magic (first 4 bytes): squashfs 68 73 71 73 = rootfs-only (safe, keeps
+   config); u-boot 06 05 04 03 = full image (rewrites the bootloader). */
+let otaBusy=false, otaBuf=null, otaSha='', otaType='';
+const otaFile=$('otafile'), otaInfo=$('otainfo'), otaGo=$('otago'),
+      otaFullWrap=$('otafullwrap'), otaFull=$('otafull'), otaNote=$('otanote');
+
+const hex=buf=>[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+function fmtBytes(n){ return n>=1048576 ? (n/1048576).toFixed(2)+' MB' : (n/1024).toFixed(0)+' KB'; }
+
+function otaReset(keepPanel){
+  otaBuf=null; otaSha=''; otaType='';
+  otaGo.disabled=true; otaFullWrap.hidden=true; otaFull.checked=false;
+  if(!keepPanel){ otaFile.value=''; }
+}
+
+otaFile.onchange=async()=>{
+  otaReset(true);
+  const f=otaFile.files[0]; if(!f)return;
+  otaInfo.textContent='Reading…';
+  try{
+    const buf=await f.arrayBuffer();
+    const first4=hex(buf.slice(0,4));
+    if(first4==='68737173')      otaType='rootfs';
+    else if(first4==='06050403') otaType='full';
+    else{ otaInfo.innerHTML='<span class="warn">Not a firmware image (unknown header '+first4+').</span>'; return; }
+    if(otaType==='full' && buf.byteLength>8388608){ otaInfo.innerHTML='<span class="warn">Too large for this flash.</span>'; return; }
+    if(otaType==='rootfs' && buf.byteLength>5373952){ otaInfo.innerHTML='<span class="warn">rootfs larger than the partition.</span>'; return; }
+    otaInfo.textContent='Hashing…';
+    otaSha=hex(await crypto.subtle.digest('SHA-256',buf));
+    otaBuf=buf;
+    if(otaType==='rootfs'){
+      otaInfo.innerHTML='<b>Rootfs</b> update · '+fmtBytes(buf.byteLength)+' · keeps wifi &amp; password';
+      otaFullWrap.hidden=true; otaGo.disabled=false; otaGo.classList.remove('danger');
+    }else{
+      otaInfo.innerHTML='<b class="warn">Full image</b> · '+fmtBytes(buf.byteLength)+' · rewrites bootloader, resets config';
+      otaFullWrap.hidden=false; otaGo.disabled=true; otaGo.classList.add('danger');
+    }
+  }catch(err){
+    otaInfo.innerHTML='<span class="warn">Could not read file: '+(err&&err.message?err.message:err)+'</span>';
+  }
+};
+
+// The full-image guard: the button only enables once the danger box is ticked.
+otaFull.onchange=()=>{ if(otaType==='full')otaGo.disabled=!otaFull.checked; };
+
+// Poll the login page until the camera answers again, then hand off to it.
+async function waitForReboot(){
+  let seenDown=false;
+  for(let i=0;i<150;i++){                 // ~5 min ceiling at 2 s
+    await new Promise(r=>setTimeout(r,2000));
+    try{
+      const r=await fetch('/login.html',{cache:'no-store'});
+      if(r.ok){
+        if(seenDown){ location.replace('/login.html'); return; }
+        // Still the pre-reboot server; wait until it actually drops first.
+      }
+    }catch(_){ seenDown=true; }           // connection refused == rebooting
+    otaNote.textContent='Flashing… the camera is rebooting'+(seenDown?' — reconnecting':'')+' ('+((i+1)*2)+'s)';
+  }
+  otaNote.innerHTML='<span class="warn">Camera has not come back after 5 minutes. Check it and reload.</span>';
+}
+
+otaGo.onclick=async()=>{
+  if(!otaBuf||otaBusy)return;
+  if(otaType==='full' && !otaFull.checked)return;
+  const label=otaType==='full'
+    ? 'Flash a FULL image? This rewrites the bootloader and resets wifi/password. If it fails the camera needs a hardware recovery flash.'
+    : 'Flash this rootfs and reboot the camera now?';
+  if(!confirm(label))return;
+
+  otaBusy=true; otaGo.disabled=true; otaFile.disabled=true;
+  otaInfo.textContent='Uploading '+fmtBytes(otaBuf.byteLength)+'…';
+  try{
+    const qs='sha256='+otaSha+'&size='+otaBuf.byteLength+(otaType==='full'?'&mode=full':'');
+    const r=await fetch('/x/ota.cgi?'+qs,{
+      method:'POST',cache:'no-store',
+      headers:{'Content-Type':'application/octet-stream'},
+      body:otaBuf
+    });
+    if(r.status===401||r.status===403){location.replace('/login.html');return;}
+    const j=await r.json().catch(()=>null);
+    if(!r.ok||!j||!j.ok){
+      otaInfo.innerHTML='<span class="warn">Rejected: '+((j&&j.error)||('HTTP '+r.status))+'</span>';
+      otaBusy=false; otaGo.disabled=false; otaFile.disabled=false; return;
+    }
+    otaInfo.textContent='Accepted — do not cut power.';
+    otaNote.textContent='Flashing… the camera is rebooting';
+    waitForReboot();
+  }catch(err){
+    // A dropped connection here can mean the flash started and took the link
+    // down — so move to the reboot wait rather than calling it a failure.
+    otaInfo.textContent='Upload ended; watching for reboot…';
+    waitForReboot();
+  }
+};
 
 connect();
 poll();
