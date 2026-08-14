@@ -43,8 +43,19 @@ OTA_BIN=/tmp/ota.bin
 OTA_LOG=/tmp/ota.log
 SQUASHFS_MAGIC=68737173
 UBOOT_MAGIC=06050403
-MTD4_SIZE=5373952   # 0x520000, the rootfs partition
-FULL_SIZE=8388608   # 0x800000, the whole flash
+FULL_SIZE=8388608   # 0x800000, the whole flash (chip size, a real constant)
+
+# Actual rootfs partition size in bytes, read from /proc/mtd. The mtdparts
+# layout lives in the bootloader env and a full-image OTA can change it (we pin
+# 5376 KB, but a recovery image might differ), so the size is a runtime fact,
+# not a build-time constant. Returns empty if it can't be read — the caller then
+# skips the pre-check and lets sysupgrade's own size guard (which also aborts
+# before erasing) do the job.
+rootfs_part_size() {
+	_sz=$(awk '/"rootfs"/{print $2; exit}' /proc/mtd 2>/dev/null)
+	[ -n "$_sz" ] || return 0
+	printf '%d' "$((0x$_sz))"
+}
 
 json() {
 	printf 'Status: %s\r\n' "$1"
@@ -112,7 +123,8 @@ magic=$(xxd -l 4 -p "$OTA_BIN" 2>/dev/null)
 case "$magic" in
 	"$SQUASHFS_MAGIC")
 		imgtype="rootfs"
-		[ "$got" -le "$MTD4_SIZE" ] || fail "rootfs larger than partition ($got > $MTD4_SIZE)"
+		part=$(rootfs_part_size)
+		[ -z "$part" ] || [ "$got" -le "$part" ] || fail "rootfs larger than partition ($got > $part)"
 		;;
 	"$UBOOT_MAGIC")
 		imgtype="full"
