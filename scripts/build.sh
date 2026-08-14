@@ -27,6 +27,26 @@ IMG=ghcr.io/themactep/thingino-builder-image:latest
 UPSTREAM_URL="$(sed -n '1p' "$REPO/UPSTREAM_PIN")"
 PIN="${PIN:-$(sed -n '2p' "$REPO/UPSTREAM_PIN")}"
 
+# Fixed rootfs partition size (bytes). Upstream auto-sizes the rootfs partition
+# to hug the squashfs (thingino Makefile: ROOTFS_PARTITION_SIZE =
+# ROOTFS_BIN_SIZE_ALIGNED) and gives the remainder to the data/overlay
+# partition — which leaves ZERO rootfs headroom, so any feature that grows the
+# rootfs would force a full (bootloader-rewriting) flash. We pin it instead so
+# routine growth stays on the safe rootfs-only OTA path.
+#
+# 5376 KB = 84 erase blocks (64 KB each) = 5,505,024 bytes. Layout becomes:
+#   boot 320 + env 64 + backup 64 + kernel 1600 + rootfs 5376 + data 768 = 8192 KB
+# data/overlay 768 KB is well above the jffs2 floor (~320 KB) and the ~148 KB in
+# use. Current rootfs is ~4.92 MB, so this reserves ~450 KB of growth room.
+#
+# Passed as a make COMMAND-LINE variable (not env): line 346 uses `=`, which
+# overrides an env var but not a command-line assignment. It propagates to the
+# offset/data/mtdparts/uenv math that all derives from it. The build's own
+# overflow guard errors if the squashfs ever exceeds this. Override per-build
+# with ROOTFS_PARTITION_SIZE=<bytes> ./scripts/build.sh; set empty to restore
+# upstream auto-sizing.
+ROOTFS_PARTITION_SIZE="${ROOTFS_PARTITION_SIZE-5505024}"
+
 # 1. upstream tree ----------------------------------------------------------
 if [ ! -d "$THINGINO_DIR/.git" ]; then
   echo "== cloning upstream -> $THINGINO_DIR"
@@ -113,9 +133,14 @@ for p in ${DIRCLEAN:-} $AUTO_DIRCLEAN; do
   echo "== dirclean + rebuild $p (forces re-extract so its patches re-apply)"
   MAKE_CMDS="$MAKE_CMDS BOARD=$CAM make $p-dirclean; BOARD=$CAM make $p;"
 done
-MAKE_CMDS="$MAKE_CMDS BOARD=$CAM make fast WORKFLOW=1"
+# Forward the fixed rootfs partition size as a make command-line variable (empty
+# = upstream auto-sizing). Command-line assignment overrides the makefile's
+# `ROOTFS_PARTITION_SIZE = ...` and propagates to every derived partition value.
+RPS_ARG=""
+[ -n "$ROOTFS_PARTITION_SIZE" ] && RPS_ARG="ROOTFS_PARTITION_SIZE=$ROOTFS_PARTITION_SIZE"
+MAKE_CMDS="$MAKE_CMDS BOARD=$CAM make fast WORKFLOW=1 $RPS_ARG"
 
-echo "== $(date +%T) starting build (make fast)"
+echo "== $(date +%T) starting build (make fast)${RPS_ARG:+  [$RPS_ARG]}"
 in_builder "$MAKE_CMDS"
 
 # 4. collect image ----------------------------------------------------------

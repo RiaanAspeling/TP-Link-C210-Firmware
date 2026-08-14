@@ -3,7 +3,9 @@
 
 # --- build artifacts / large binaries (publish releases via GitHub Releases) ---
 /images/*.bin
+/images/*.squashfs
 *.bin
+*.squashfs
 
 # --- local upstream build tree + build scratch (self-contained, never committed) ---
 /build/
