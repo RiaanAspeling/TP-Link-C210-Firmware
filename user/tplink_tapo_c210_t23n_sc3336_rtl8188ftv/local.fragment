@@ -43,7 +43,17 @@ BR2_PACKAGE_THINGINO_RAPTOR_WEBRTC=y
 # broken on this libimp. Deliberately NOT setting IVS_DETECT: it force-links
 # libjzdl + libstdc++ (~655 KB) and is only needed for the JZDL/YOLO paths.
 BR2_PACKAGE_THINGINO_RAPTOR_RMD=y
-# BR2_PACKAGE_THINGINO_RAPTOR_RMR is not set
+# RMR is the fMP4 recording daemon — the engine our SD-recording feature builds
+# on. It records the already-encoded bitstream (continuous/motion/both), muxes
+# fMP4, keeps a 0-5s pre-buffer, and enforces storage caps. Enabled but inert
+# until the [recording] section of raptor.conf turns it on (shipped default:
+# off), so it costs nothing at runtime until we wire up the config UI.
+#
+# Feasibility measured on hardware: 46 KB binary, +24 KB in the rootfs (544 KB
+# headroom left → stays on the rootfs-only OTA path), ~11% CPU while recording
+# the substream, and the clips are valid fMP4 (h264+aac) that play natively in
+# <video>. Links the already-shipped librss_common.
+BR2_PACKAGE_THINGINO_RAPTOR_RMR=y
 # BR2_PACKAGE_THINGINO_RAPTOR_RSP is not set
 # BR2_PACKAGE_THINGINO_RAPTOR_WEBTORRENT is not set
 
