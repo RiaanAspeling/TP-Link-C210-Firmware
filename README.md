@@ -22,6 +22,7 @@ ONVIF/RTSP software.
 | Pan/tilt — web UI, ONVIF continuous (press-and-hold), absolute moves, presets | ✅ |
 | Motion detection — custom frame-difference detector (vendor IVS is broken) | ✅ |
 | Lean web UI — login, WebRTC live view (1080p/360p), smooth PTZ | ✅ |
+| OTA firmware update from the web UI (rootfs or full image) | ✅ |
 | IR-cut + automatic day/night (gain-based) | ✅ |
 | Wi-Fi setup, web UI, SSH | ✅ |
 
@@ -75,6 +76,15 @@ DIRCLEAN="spi-tmi8152 thingino-motors" ./scripts/build.sh   # after editing thei
 First run clones upstream into `build/thingino/` (~11 GB with the download cache); later
 runs reuse it. Overrides: `THINGINO_DIR=<path>`, `PIN=<sha>`, `NO_PIN=1`.
 
+**Reserved rootfs partition.** `build.sh` pins `ROOTFS_PARTITION_SIZE=5505024` (5376 KB) as a
+make command-line variable. Upstream auto-sizes the rootfs partition to hug the squashfs
+(see [Image prune](#image-prune)), which leaves *zero* rootfs headroom — so any feature that
+grew the rootfs would force a full, bootloader-rewriting flash. Pinning it reserves ~450 KB
+of growth (current rootfs ~4.9 MB) so routine updates stay on the safe [rootfs-only OTA](#ota-update)
+path; the overlay gets the fixed remainder (768 KB, well above the jffs2 floor). Override
+per-build with `ROOTFS_PARTITION_SIZE=<bytes> ./scripts/build.sh`, or empty to restore
+upstream auto-sizing. The build's own guard errors if the squashfs ever exceeds it.
+
 > **Use `CLEAN=1` whenever you disable a package or change `BR2_THINGINO_RMEM_MB`.**
 > Buildroot doesn't prune `target/` when a package is removed, so an incremental build
 > silently keeps stale binaries — and the U-Boot env generator only *appends* `osmem`/`rmem`
@@ -123,6 +133,102 @@ flashing, or the OOM killer may take out SSH mid-write.
 
 **Full / recovery:** the 8 MB image via a CH341A programmer, or `sysupgrade` (wipes the
 overlay, so Wi-Fi and password need setting up again).
+
+**From the browser:** the WebUI's **System ▾ → Firmware update** does the same rootfs flash
+(or a full one) without SSH — see [OTA update](#ota-update).
+
+## OTA update
+
+**System ▾ → Firmware update** in the lean WebUI uploads a firmware image and flashes it,
+so a field camera can be updated over the network. It does **not** reimplement flashing —
+that is [`/usr/sbin/sysupgrade`](https://github.com/themactep/thingino-firmware/tree/master/package/thingino-sysupgrade),
+which ships in this build. `x/ota.cgi` only validates the upload and hands off.
+
+**Why lean on `sysupgrade`.** Its stage 2 clones busybox and itself into tmpfs, starts a
+RAM watchdog, and only *then* erases and rewrites the partition with `flashcp -v` (verify)
+before `reboot -f`. Rewriting the rootfs you are booted from is safe precisely because
+nothing on flash is executing by that point — strictly better than a bare
+`flashcp /dev/mtd4` from the live squashfs. Reinventing that would be more code and less
+safe.
+
+**Two image types, one invocation.** Both go through **`sysupgrade -x <file>` in *local*
+mode**, which auto-detects by leading magic. `ota.cgi` **never passes `-r`** — see the
+warning below.
+
+| Upload | Magic | Effect |
+|---|---|---|
+| `rootfs.squashfs` | `68 73 71 73` | flashes **mtd4 only**, leaves the jffs2 overlay — Wi-Fi, password, presets survive |
+| full 8 MB `.bin` | `06 05 04 03` | rewrites kernel + rootfs + **bootloader** (and repartitions); resets config; can brick |
+
+`-x` keeps it fully offline (no GitHub self-update). Rootfs is the default and the safe
+path; the full image is gated behind a second, explicit checkbox in the UI (and `ota.cgi`
+refuses a u-boot image unless the request carries `mode=full`). Both paths are **validated
+on real hardware** — a rootfs update that kept settings, and a full update that changed the
+partition layout over the network without a CH341A.
+
+> **Never `sysupgrade -r`.** Its rootfs-only branch `exit 0`s *before* it sets up the tmpfs
+> busybox applet symlinks and `PATH=/tmp/sysupgrade`, so its `flashcp` runs from `/usr/sbin`
+> **on the rootfs it is erasing**. Once mtd4 is blank the flasher faults from erased flash
+> and dies mid-write, leaving mtd4 fully erased → unbootable. This bricked a camera during
+> development (CH341A dump: mtd4 100 % `0xFF`, bootloader and kernel intact). Local mode
+> instead routes a squashfs through the generic path that hands off to `sysupgrade-stage2`,
+> which flashes from the tmpfs busybox with the streamer stopped and the watchdog taken over
+> from RAM. busybox is dynamically linked, so even that relies on uClibc staying resident
+> through the erase — which it does under low memory pressure, so `ota.cgi` stops raptor and
+> drops caches before handing off. (A bare `flashcp /dev/mtd4` from SSH survives for exactly
+> the same reason: only if the streamer was stopped first.)
+
+**Integrity is checked in the browser and re-checked on the camera.** `crypto.subtle`
+(available because the WebUI forces HTTPS — see [below](#force-https-on-the-webui)) computes
+the image's SHA-256 before upload; `ota.cgi` re-hashes the received bytes and refuses to
+flash on any mismatch — catching a truncated or corrupted transfer *before* anything touches
+flash. The magic and partition-size checks run regardless.
+
+**Mechanics.** The image is POSTed as a raw `application/octet-stream` body (no multipart
+parsing in shell), streamed to `/tmp/ota.bin` bounded by `Content-Length`. `ota.cgi`
+touches `/tmp/webupgrade` — the flag `sysupgrade` checks to keep `httpd` alive through the
+flash — then launches it `setsid`-detached with stdin from `/dev/null`, so the JSON
+response reaches the browser before the reboot and the full-image countdown (which waits
+for a keypress that never comes) simply elapses. The page then polls `/login.html` until
+the camera drops and returns, and redirects there.
+
+> **tmpfs is 19 MB.** `sysupgrade` **moves** the upload into its workdir rather than
+> copying, so a rootfs is ~4.8 MB and a full image ~8 MB resident at once — both fit.
+> raptor (~20 MB RSS) is stopped by `sysupgrade` before flashing; the upload itself lands
+> in tmpfs, whose size is independent of that. Once SD recording lands, staging a large
+> image on the card removes even this margin (`sysupgrade` flashes in place from
+> `/mnt/mmcblk0p1`).
+
+> **No A/B, single flash.** A power cut mid-write corrupts the rootfs and needs a CH341A
+> recovery — inherent to 8 MB flash. Rootfs OTA never touches the bootloader or kernel, and
+> the magic check refuses anything that isn't a squashfs, so the realistic failure mode is
+> a bad *upload* (caught before flashing), not a bad *flash*. Keep a known-good image, and
+> don't flash on flaky power.
+
+**Growing the rootfs.** A rootfs-only OTA can only flash a squashfs that fits the *current*
+rootfs partition — it doesn't rewrite the partition table (that lives in the U-Boot env). So
+the layout deliberately [reserves rootfs headroom](#image-prune): feature growth up to that
+ceiling stays on the safe rootfs-only path. A rootfs that outgrows it needs a full-image
+OTA, which repartitions — that path is proven, but it resets the overlay and rewrites the
+bootloader, so the UI gates it behind an explicit confirmation. (A full image slices by the
+*current* partition table, so on a layout change the fixed partitions and the rootfs land
+correctly and only the disposable overlay is rebuilt.)
+
+### Force-HTTPS on the WebUI
+
+The login POSTs the password base64-encoded, which is not encryption — over http it crosses
+the LAN in the clear. So `login.html` and `index.html` redirect http→https client-side
+(a one-shot `location.protocol` check at the top of `<head>`). This also guarantees a secure
+context for the OTA page's `crypto.subtle`.
+
+It is **scoped to the browser UI on purpose.** The obvious lever, uhttpd's `-q` (redirect
+*all* http→https), was tested and rejected: it 307-redirects the ONVIF SOAP endpoints and
+the `/x/ch*.jpg` snapshot URLs too, and ONVIF/SOAP clients (iSpy, IP Cam Viewer) don't
+follow the redirect or can't accept the self-signed cert — so `-q` breaks ONVIF. ONVIF, RTSP
+and snapshots stay on http, where their clients expect them (ONVIF has its own WS-Security
+digest auth, so its credentials aren't sent in the clear). The one caveat: the redirect
+assumes a cert exists (S02ssl makes one on first boot); in the rare http-only fallback there
+is no `:443` and access is via SSH.
 
 ## Credentials
 
@@ -265,6 +371,7 @@ cruise-decelerate seek, identical to ONVIF.
 | `x/motion.cgi` | motion state, zone bitmap, zone mask |
 | `x/video.cgi` | frame rate / bitrate: applies live and persists to `raptor.conf` |
 | `x/mjpeg.cgi` | same-origin MJPEG proxy for rhd (fallback preview) |
+| `x/ota.cgi` | firmware upload + validation, hands off to `sysupgrade` — see [OTA update](#ota-update) |
 | `x/ch0.jpg`, `x/ch1.jpg` | **override** — ONVIF snapshot URIs, proxied from rhd (`x/snapshot.sh`) |
 | `x/webrtc-whip.cgi` | **override** of raptor's WHIP proxy — see below |
 
@@ -314,8 +421,17 @@ Two defects in the stock file, both fixed in our copy:
 
 ## Image prune
 
-`mtd4` (rootfs) is `0x520000` = 5,373,952 bytes, and the build had ~112 KB of headroom.
-Two things were wasting most of it, and **neither can be dropped by config alone**:
+The 8 MB flash is split boot/env/backup/kernel/rootfs/data, and the **rootfs partition is
+sized at build time** — thingino aligns it up to the actual squashfs and hands the remainder
+to the data/overlay partition (`Makefile`: `ROOTFS_PARTITION_SIZE = ROOTFS_BIN_SIZE_ALIGNED`;
+`DATA_SIZE_KB = FLASH − offsets − ROOTFS`). So "flash headroom" is **not** slack inside a
+fixed rootfs partition — it's the **6144 KB pool** that rootfs and overlay share after the
+2048 KB of fixed partitions (boot 320 + env 64 + backup 64 + kernel 1600). Every byte the
+prune removes from the rootfs is a byte that moves to the overlay — or, once we [reserve a
+fixed rootfs size](#build), to rootfs growth room for OTA. Before the prune the rootfs was
+close to squeezing the overlay below its jffs2 floor.
+
+Two things were wasting most of the pool, and **neither can be dropped by config alone**:
 
 - **The stock web UI.** `thingino-webui` also ships the session layer our pages depend
   on — `auth.sh`, `session.sh`, `login.cgi` — and `onvif.cgi` sources `auth.sh` too. So
@@ -337,15 +453,16 @@ Upstream leaves `POST_FAKEROOT` empty (it uses `POST_BUILD` for `rootfs_script.s
 claiming the hook overrides nothing.
 
 The prune is **deny-by-default**: `/var/www` is rebuilt from a keep list, so a page added
-by a future upstream package is dropped unless it is named. With ~100 KB of headroom a
-silent addition would otherwise blow the partition at pack time with a far less obvious
-error. The script asserts every file the UI needs still exists and fails the build if not
+by a future upstream package is dropped unless it is named. With the rootfs partition
+hugging the squashfs, a silent addition eats overlay space (and, once the rootfs is pinned,
+can overflow the partition at pack time with a far less obvious error). The script asserts every file the UI needs still exists and fails the build if not
 — a typo in the keep list would otherwise ship a firmware whose login page 404s, and the
 camera is a flash cycle away from being testable.
 
 What survives in `/var/www`: our `index.html` and `login.html`; `onvif/` untouched; and in
-`x/`, the session plumbing, `ch0.jpg`/`ch1.jpg` (named as the ONVIF snapshot URIs), the
-uhttpd `-E` handler, `reboot.cgi`, and our seven CGIs.
+`x/`, the session plumbing, `ch0.jpg`/`ch1.jpg` + `snapshot.sh` (the ONVIF snapshot proxy),
+the uhttpd `-E` handler, `reboot.cgi`, and our CGIs (PTZ, motors, presets, motion, video,
+the MJPEG/WHIP proxies, and OTA).
 
 Dropping the `json-*.cgi` family also removes most of the stock UI's `eval $QUERY_STRING`
 surface, including `run.cgi` (arbitrary command execution) and `texteditor.cgi`. Our
