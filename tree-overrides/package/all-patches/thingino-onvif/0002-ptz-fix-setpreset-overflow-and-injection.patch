@@ -1,0 +1,122 @@
+From: Tapo-C210 lean firmware
+Subject: [PATCH] ptz: fix stack overflow and shell injection in SetPreset
+
+preset_name_out is char[UUID_LEN + 8] = 44 bytes, but both branches of
+ptz_set_preset() filled it with strcpy() / strncpy(dst, src, strlen(src))
+and only checked the length AFTERWARDS, against 64. A 50-character name --
+legal by that check -- smashes the stack before the check ever runs.
+
+The name is then interpolated into ptz_node.set_preset
+("/sbin/ptz_presets -a %d %s") and passed to system(). The old validation
+rejected spaces and nothing else, but shell injection does not need spaces:
+backtick-reboot, $(reboot), ;reboot and ${IFS} all work. Any client holding
+ONVIF credentials had command execution as root.
+
+Validate before copying: bound the length to the destination and whitelist
+the characters safe both as a shell word and inside a NUM=NAME,X,Y config
+line. The kept name is validated too -- with no new name supplied it comes
+from ptz_presets.conf and still reaches the same system() call.
+
+--- a/src/ptz_service.c
++++ b/src/ptz_service.c
+@@ -41,6 +41,47 @@
+    0=Stop, TS=/proc/uptime seconds. See /usr/sbin/ptz-glide. */
+ #define PTZ_GLIDE_STATE "/tmp/ptz_glide"
+ 
++/* LEAN PATCH (Tapo C210): validate a client-supplied preset name BEFORE it is
++   copied anywhere. Two bugs, both reachable by any authenticated ONVIF client:
++
++     - preset_name_out is char[UUID_LEN + 8] = 44 bytes, but ptz_set_preset()
++       filled it with strcpy() / strncpy(dst, src, strlen(src)) and only checked
++       the length afterwards, against 64. A 50-character name -- legal by that
++       check -- already smashes the stack.
++
++     - the name is then interpolated into ptz_node.set_preset
++       ("/sbin/ptz_presets -a %d %s") and handed to system(). The old check
++       rejected spaces and nothing else, but shell injection does not need
++       spaces: `reboot`, $(reboot), ;reboot and ${IFS} all work.
++
++   So bound the length to the destination and whitelist the characters that are
++   safe both as a shell word and inside a NUM=NAME,X,Y config line. That
++   excludes ',' and '=' (config format), '/' (sed replacement in ptz_presets)
++   and space (which upstream already rejected). */
++static int ptz_preset_name_is_valid(const char *name, size_t cap)
++{
++    size_t i, len;
++
++    if (name == NULL)
++        return 0;
++
++    len = strlen(name);
++    if (len == 0 || len >= cap)
++        return 0;
++
++    for (i = 0; i < len; i++) {
++        char c = name[i];
++
++        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '_') || (c == '-')
++            || (c == '.'))
++            continue;
++
++        return 0;
++    }
++
++    return 1;
++}
++
+ int ptz_supports_zoom()
+ {
+     if (service_ctx.ptz_node.enable == 0) {
+@@ -2008,12 +2049,16 @@
+         if (preset_name == NULL) {
+             // No name and no token, how to identify it? Create a random name.
+             gen_uuid(name_uuid);
+-            sprintf(preset_name_out, "Preset_%s", name_uuid);
++            snprintf(preset_name_out, sizeof(preset_name_out), "Preset_%s", name_uuid);
++        } else if (ptz_preset_name_is_valid(preset_name, sizeof(preset_name_out))) {
++            snprintf(preset_name_out, sizeof(preset_name_out), "%s", preset_name);
+         } else {
+-            strcpy(preset_name_out, preset_name);
++            // LEAN PATCH: reject before copying, not after -- see
++            // ptz_preset_name_is_valid().
++            preset_name_out[0] = '\0';
+         }
+ 
+-        if ((strchr(preset_name_out, ' ') != NULL) || (strlen(preset_name_out) == 0) || (strlen(preset_name_out) > 64)) {
++        if (strlen(preset_name_out) == 0) {
+             destroy_presets();
+             send_fault("ptz_service",
+                        "Sender",
+@@ -2049,7 +2094,7 @@
+         preset_found = 0;
+         for (i = 0; i < presets.count; i++) {
+             if (presets.items[i].number == preset_number) {
+-                strcpy(preset_name_out, presets.items[i].name);
++                snprintf(preset_name_out, sizeof(preset_name_out), "%s", presets.items[i].name);
+                 preset_found = 1;
+                 break;
+             }
+@@ -2061,12 +2106,19 @@
+         }
+ 
+         if (preset_name != NULL) {
+-            // Overwrite the name with the new one
+-            memset(preset_name_out, '\0', sizeof(preset_name_out));
+-            strncpy(preset_name_out, preset_name, strlen(preset_name));
++            // Overwrite the name with the new one. LEAN PATCH: validate before
++            // the copy -- see ptz_preset_name_is_valid().
++            if (ptz_preset_name_is_valid(preset_name, sizeof(preset_name_out)))
++                snprintf(preset_name_out, sizeof(preset_name_out), "%s", preset_name);
++            else
++                preset_name_out[0] = '\0';
+         }
+ 
+-        if ((strchr(preset_name_out, ' ') != NULL) || (strlen(preset_name_out) == 0) || (strlen(preset_name_out) > 64)) {
++        /* LEAN PATCH: validate the kept name too. When no new name is supplied
++           this still came out of ptz_presets.conf, and it is about to be pasted
++           into a system() command line -- a stored name containing a space
++           would silently truncate the preset ("Front Door" -> "Front"). */
++        if (!ptz_preset_name_is_valid(preset_name_out, sizeof(preset_name_out))) {
+             destroy_presets();
+             send_fault("ptz_service",
+                        "Sender",

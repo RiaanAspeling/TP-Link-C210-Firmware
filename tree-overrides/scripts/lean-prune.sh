@@ -71,12 +71,10 @@ KEEP_ROOT="index.html login.html"
 #   auth.sh session.sh login.cgi logout.cgi session-status.cgi
 #       the session layer our pages and every CGI below depend on;
 #       onvif.cgi sources auth.sh too.
-#   ch0.jpg ch1.jpg
-#       named as the snapshot URIs in /etc/onvif.json. They shell out to
-#       prudyntctl, which does not exist on a raptor build, so they are
-#       already broken — kept because deleting them would turn a broken
-#       snapshot into a 404 in every ONVIF client, which is harder to
-#       diagnose. Fixing them to use raptor is a separate job.
+#   ch0.jpg ch1.jpg snapshot.sh
+#       named as the snapshot URIs in /etc/onvif.json, and ch0.jpg is also the
+#       target of the /var/www/onvif/image.cgi symlink. Ours, proxying rhd —
+#       the stock pair shelled out to prudyntctl, absent on a raptor build.
 #   legacy-url-recovery.cgi
 #       uhttpd's -E handler, set in /etc/default/uhttpd.
 #   reboot.cgi
@@ -87,7 +85,7 @@ KEEP_ROOT="index.html login.html"
 # execution and arbitrary file writes) and the json-*.cgi family, most of which
 # eval() QUERY_STRING. Our own motors.cgi replaces json-motor.cgi.
 KEEP_X="auth.sh session.sh login.cgi logout.cgi session-status.cgi
-        ch0.jpg ch1.jpg legacy-url-recovery.cgi reboot.cgi
+        ch0.jpg ch1.jpg snapshot.sh legacy-url-recovery.cgi reboot.cgi
         mjpeg.cgi motion.cgi motors.cgi presets.cgi ptz.cgi video.cgi
         webrtc-whip.cgi"
 
@@ -129,7 +127,7 @@ echo "lean-prune: removed $removed entries under /var/www"
 for need in index.html login.html \
             x/auth.sh x/session.sh x/login.cgi x/logout.cgi \
             x/ptz.cgi x/motors.cgi x/presets.cgi x/motion.cgi x/video.cgi \
-            x/webrtc-whip.cgi x/mjpeg.cgi; do
+            x/webrtc-whip.cgi x/mjpeg.cgi x/snapshot.sh x/ch0.jpg x/ch1.jpg; do
 	[ -e "$WWW/$need" ] || { echo "lean-prune: FATAL - $need missing after prune"; exit 1; }
 done
 [ -x "$WWW/onvif/onvif.cgi" ] || { echo "lean-prune: FATAL - onvif.cgi missing"; exit 1; }

@@ -54,8 +54,12 @@ chmod 0755 "$THINGINO_DIR/overlay/etc/init.d/S59motor" \
            "$THINGINO_DIR/overlay/usr/sbin/daynight" \
            "$THINGINO_DIR/overlay/usr/sbin/ptz-glide" 2>/dev/null || true
 
-# CGIs must be executable or uhttpd serves them as plain text
-chmod 0755 "$THINGINO_DIR"/overlay/var/www/x/*.cgi 2>/dev/null || true
+# CGIs must be executable or uhttpd serves them as plain text. The ONVIF
+# snapshot endpoints are CGIs too despite the .jpg names — uhttpd runs anything
+# executable under the /x prefix.
+chmod 0755 "$THINGINO_DIR"/overlay/var/www/x/*.cgi \
+           "$THINGINO_DIR"/overlay/var/www/x/*.jpg \
+           "$THINGINO_DIR"/overlay/var/www/x/*.sh 2>/dev/null || true
 
 # post-fakeroot image prune (referenced from local.fragment)
 chmod 0755 "$THINGINO_DIR/scripts/lean-prune.sh" 2>/dev/null || true

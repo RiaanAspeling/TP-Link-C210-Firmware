@@ -60,21 +60,63 @@ OVR=""; [ -d overrides ] && OVR="-v $(readlink -f overrides):/overrides"
 # single */ silently matched nothing and the pack step reused a stale rootfs.
 rm -f output/*/*/images/rootfs.squashfs 2>/dev/null || true
 
+in_builder() {
+  docker run --rm --user "$(id -u):$(id -g)" --network=host \
+    -v "$PWD":/workspace $OVR -v "$PWD/dl":/dl -w /workspace \
+    -e TERM=xterm-256color -e BR2_DL_DIR=/dl -e HOME=/workspace \
+    "$IMG" bash -lc "sudo update-alternatives --install /usr/bin/install install /usr/bin/gnuinstall 100 2>/dev/null;$1"
+}
+
+# --- config first, in its own make invocation -------------------------------
+# `make fast` is `user-dirs defconfig build_fast pack`. Regenerating .config in
+# the same run that builds is what produced the long-standing "first build after
+# a config change is stale, and still exits 0" trap: a package whose *sub-options*
+# changed keeps its .stamp_built, so Buildroot never rebuilds it and packs the
+# previous binary. That is how RMD went missing from an exit-0 build.
+#
+# So: run defconfig alone, diff the .config it produces against the one the last
+# build used, and dirclean whatever package owns each changed symbol before
+# building. The workaround until now was "just build twice", which does not
+# actually fix this — it only helped when the stale artefact happened to be
+# rebuilt for another reason.
+CFG_PATH="$(ls -d output/*/"${CAM}"-*/.config 2>/dev/null | head -1 || true)"
+CFG_BEFORE="$(mktemp)"; trap 'rm -f "$CFG_BEFORE"' EXIT
+[ -n "$CFG_PATH" ] && [ -f "$CFG_PATH" ] && cp "$CFG_PATH" "$CFG_BEFORE"
+
+echo "== $(date +%T) generating .config"
+in_builder "BOARD=$CAM make defconfig"
+
+CFG_PATH="$(ls -d output/*/"${CAM}"-*/.config 2>/dev/null | head -1 || true)"
+AUTO_DIRCLEAN=""
+if [ -n "$CFG_PATH" ] && [ -s "$CFG_BEFORE" ]; then
+  # Symbols that appear on exactly one side, reduced to the bare symbol name.
+  CHANGED="$(diff "$CFG_BEFORE" "$CFG_PATH" 2>/dev/null \
+             | sed -n 's/^[<>] *\(# *\)\?\(BR2_[A-Za-z0-9_]*\).*/\2/p' | sort -u || true)"
+  for sym in $CHANGED; do
+    # The package that declares the symbol owns the stale artefact. Buildroot's
+    # target name is the package directory name.
+    owner="$(grep -rl "^[[:space:]]*config[[:space:]]\+${sym}\$" package/*/Config.in 2>/dev/null \
+             | head -1 | cut -d/ -f2 || true)"
+    [ -n "$owner" ] || continue
+    case " $AUTO_DIRCLEAN ${DIRCLEAN:-} " in
+      *" $owner "*) ;;
+      *) AUTO_DIRCLEAN="$AUTO_DIRCLEAN $owner"; echo "== config changed: $sym -> rebuild $owner" ;;
+    esac
+  done
+fi
+
 # Per-package re-extract. `make fast` only builds what the pack step needs, so a
 # dirclean alone leaves the package MISSING and silently packs a stale rootfs —
 # each package must be rebuilt explicitly before packing.
 MAKE_CMDS=""
-for p in ${DIRCLEAN:-}; do
+for p in ${DIRCLEAN:-} $AUTO_DIRCLEAN; do
   echo "== dirclean + rebuild $p (forces re-extract so its patches re-apply)"
   MAKE_CMDS="$MAKE_CMDS BOARD=$CAM make $p-dirclean; BOARD=$CAM make $p;"
 done
 MAKE_CMDS="$MAKE_CMDS BOARD=$CAM make fast WORKFLOW=1"
 
 echo "== $(date +%T) starting build (make fast)"
-docker run --rm --user "$(id -u):$(id -g)" --network=host \
-  -v "$PWD":/workspace $OVR -v "$PWD/dl":/dl -w /workspace \
-  -e TERM=xterm-256color -e BR2_DL_DIR=/dl -e HOME=/workspace \
-  "$IMG" bash -lc "sudo update-alternatives --install /usr/bin/install install /usr/bin/gnuinstall 100 2>/dev/null;$MAKE_CMDS"
+in_builder "$MAKE_CMDS"
 
 # 4. collect image ----------------------------------------------------------
 # newest by mtime (NOT alphabetical: detached-HEAD builds land in output/HEAD,

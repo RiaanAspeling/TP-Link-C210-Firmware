@@ -1,0 +1,11 @@
+#!/bin/sh
+# ONVIF snapshot, channel 1 — named in onvif.json as "snapurl".
+# /var/www/onvif/image.cgi is a symlink to ch0.jpg, so this serves that too.
+# Replaces the stock version, which shelled out to prudyntctl (absent on a
+# raptor build). See snapshot.sh.
+
+. /var/www/x/auth.sh
+require_auth
+
+. /var/www/x/snapshot.sh
+serve_snapshot

@@ -1,0 +1,188 @@
+#!/bin/sh
+#
+# LEAN PATCH (Tapo C210) -- see tree-overrides/ in the firmware repo.
+#
+# Upstream built the config line with
+#
+#     sed -i "s/^$PRESET_NUM=.*/$PRESET_NUM=$PRESET_NAME,$PRESET_X,$PRESET_Y/"
+#
+# with the name unquoted inside the replacement. A name containing '/' ends the
+# s/// expression early, so the rest is parsed as sed flags -- and busybox sed
+# supports the `w FILE` flag, giving an arbitrary file write as root. A name
+# containing '&' silently expands to the whole match instead.
+#
+# Callers are supposed to sanitise, but there are two of them: the WebUI CGI
+# (which does) and ONVIF SetPreset (which pastes the name into a system()
+# command line). Do not rely on either -- validate here, where the file is
+# actually written, and build the line with awk -v so no client string is ever
+# interpreted as sed syntax.
+
+PTZ_CONF_FILE="/etc/ptz_presets.conf"
+
+# Accept only what is safe in a NUM=NAME,X,Y line and as a shell word. Callers
+# that need spaces (the WebUI allows them) still work: the name is passed as a
+# single argument and only the characters below survive.
+sanitise_name() {
+	printf '%s' "$1" | tr -d '\000-\037' | tr -cd 'A-Za-z0-9 ._-' | cut -c1-40
+}
+
+is_uint() {
+	case "$1" in
+		'' | *[!0-9]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+# set_line <number> <name> <x> <y> -- replace or append NUM=NAME,X,Y.
+# awk -v keeps every value as data; nothing is re-parsed as a pattern.
+set_line() {
+	_num="$1"; _name="$2"; _x="$3"; _y="$4"
+	_tmp=$(mktemp "${PTZ_CONF_FILE}.XXXXXX") || return 1
+	awk -v num="$_num" -v name="$_name" -v px="$_x" -v py="$_y" '
+		BEGIN { done = 0; line = num "=" name "," px "," py }
+		$0 ~ "^" num "=" { if (!done) { print line; done = 1 } ; next }
+		{ print }
+		END { if (!done) print line }
+	' "$PTZ_CONF_FILE" > "$_tmp" || { rm -f "$_tmp"; return 1; }
+	cat "$_tmp" > "$PTZ_CONF_FILE"
+	rm -f "$_tmp"
+}
+
+usage() {
+	echo "Usage: $0 [-g] [-a <preset_number> <preset_name> [<x_coord> <y_coord>]] [-r <preset_number>]
+	-g: Display all presets
+	-a: Add or overwrite a preset with number, name, and optionally coordinates.
+	    Use -1 as preset_number to auto-select an empty slot (based on missing coordinates).
+	-r: Remove a preset by number
+	<preset_number>: Run the specified preset
+" >&2
+	exit 1
+}
+
+if [ $# -lt 1 ]; then
+	usage
+fi
+
+case "$1" in
+	-g)
+		while IFS='=,' read -r PNUM PNAME PX PY; do
+			[ "${PNUM#\#}" != "$PNUM" ] || echo "$PNUM=$PNAME,$PX,$PY"
+		done < "$PTZ_CONF_FILE"
+		exit 0
+		;;
+	-a)
+		if [ $# -lt 3 ]; then
+			echo "Error: Missing arguments for -a." >&2
+			usage
+		fi
+
+		INPUT_NUM=$2
+		# LEAN PATCH: sanitise here, at the point of write -- see top of file.
+		PRESET_NAME=$(sanitise_name "$3")
+		[ -n "$PRESET_NAME" ] || PRESET_NAME="Preset"
+
+		if [ "$INPUT_NUM" != "-1" ] && ! is_uint "$INPUT_NUM"; then
+			echo "Error: preset number must be a non-negative integer or -1." >&2
+			exit 1
+		fi
+
+		if [ $# -eq 5 ]; then
+			PRESET_X=$4
+			PRESET_Y=$5
+		else
+			MOTOR_POS=$(motors -p)
+			PRESET_X=$(echo "$MOTOR_POS" | cut -d',' -f1)
+			PRESET_Y=$(echo "$MOTOR_POS" | cut -d',' -f2)
+			[ -z "$PRESET_X" ] || [ -z "$PRESET_Y" ] && echo "Error: Failed to get coordinates from motors -p" && exit 1
+		fi
+
+		# LEAN PATCH: coordinates land in the same config line, so they get the
+		# same treatment as the name -- integers only, whether they came from
+		# the caller or from `motors -p`.
+		if ! is_uint "$PRESET_X" || ! is_uint "$PRESET_Y"; then
+			echo "Error: coordinates must be non-negative integers." >&2
+			exit 1
+		fi
+
+		if [ "$INPUT_NUM" = "-1" ]; then
+			# Find the first preset with missing coordinates
+			TEMP_FILE=$(mktemp)
+			USED=0
+			while IFS= read -r line; do
+				case "$line" in
+					\#*) echo "$line" >> "$TEMP_FILE" ;;
+					*)
+						PNUM=$(echo "$line" | cut -d'=' -f1)
+						VALS=$(echo "$line" | cut -d'=' -f2)
+						PX=$(echo "$VALS" | cut -d',' -f2)
+						PY=$(echo "$VALS" | cut -d',' -f3)
+						if [ "$USED" -eq 0 ] && { [ -z "$PX" ] || [ -z "$PY" ]; }; then
+							echo "$PNUM=$PRESET_NAME,$PRESET_X,$PRESET_Y" >> "$TEMP_FILE"
+							USED=1
+							PRESET_NUM=$PNUM
+						else
+							echo "$line" >> "$TEMP_FILE"
+						fi
+						;;
+				esac
+			done < "$PTZ_CONF_FILE"
+
+			if [ "$USED" -eq 0 ]; then
+				PRESET_NUM=$(awk -F= '/^[0-9]+=/ {print $1}' "$PTZ_CONF_FILE" | sort -n | tail -n1)
+				PRESET_NUM=$((PRESET_NUM + 1))
+				echo "$PRESET_NUM=$PRESET_NAME,$PRESET_X,$PRESET_Y" >> "$TEMP_FILE"
+			fi
+
+			mv "$TEMP_FILE" "$PTZ_CONF_FILE"
+			echo "Preset $PRESET_NUM added or updated."
+		else
+			PRESET_NUM=$INPUT_NUM
+			# LEAN PATCH: awk -v instead of sed interpolation. set_line()
+			# replaces in place or appends, so the grep is no longer needed to
+			# choose between the two.
+			if grep -q "^$PRESET_NUM=" "$PTZ_CONF_FILE"; then
+				set_line "$PRESET_NUM" "$PRESET_NAME" "$PRESET_X" "$PRESET_Y" || exit 1
+				echo "Preset $PRESET_NUM updated."
+			else
+				set_line "$PRESET_NUM" "$PRESET_NAME" "$PRESET_X" "$PRESET_Y" || exit 1
+				echo "Preset $PRESET_NUM added."
+			fi
+		fi
+		exit 0
+		;;
+	-r)
+		[ $# -ne 2 ] && echo "Error: Missing preset number." && usage
+		PRESET_NUM=$2
+		# LEAN PATCH: the number reaches both grep (as a pattern) and sed (as an
+		# expression), so pin it to digits before either sees it.
+		if ! is_uint "$PRESET_NUM"; then
+			echo "Error: preset number must be a non-negative integer." >&2
+			exit 1
+		fi
+		if grep -q "^$PRESET_NUM=" "$PTZ_CONF_FILE"; then
+			set_line "$PRESET_NUM" "" "" "" || exit 1
+			echo "Preset $PRESET_NUM removed."
+		else
+			echo "Preset $PRESET_NUM not found."
+		fi
+		exit 0
+		;;
+	*)
+		PRESET_NUM=$1
+		while IFS='=,' read -r PNUM PNAME PX PY; do
+			[ "${PNUM#\#}" != "$PNUM" ] && continue
+			if [ "$PNUM" = "$PRESET_NUM" ]; then
+				if [ -n "$PX" ] && [ -n "$PY" ]; then
+					logger -t ptz_presets "Running: motors -d h -x $PX -y $PY"
+					motors -d h -x "$PX" -y "$PY"
+					exit 0
+				else
+					echo "Invalid preset or missing coordinates for $PRESET_NUM."
+					exit 1
+				fi
+			fi
+		done < "$PTZ_CONF_FILE"
+		echo "Preset $PRESET_NUM not found."
+		exit 1
+		;;
+esac

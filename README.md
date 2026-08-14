@@ -81,9 +81,30 @@ runs reuse it. Overrides: `THINGINO_DIR=<path>`, `PIN=<sha>`, `NO_PIN=1`.
 > if absent, so an incremental build keeps the old memory split.
 >
 > **Use `DIRCLEAN="<pkg>"` after adding or editing a patch** under
-> `tree-overrides/package/all-patches/<pkg>/`. Buildroot applies patches only at extract
+> `tree-overrides/package/all-patches/<pkg>/`, or after changing a file the package
+> installs from its own `files/` directory. Buildroot applies patches only at extract
 > time, so an already-extracted package silently ignores a new patch — the build succeeds
 > and the fix simply isn't in it.
+
+**Config changes are handled automatically.** `make fast` is
+`user-dirs defconfig build_fast pack`, and regenerating `.config` in the same run that
+builds is what produced the long-standing trap: *the first build after a config change is
+stale, and still exits 0.* A package whose sub-options changed keeps its `.stamp_built`,
+so Buildroot never rebuilds it and packs the previous binary — that is how `rmd` went
+missing from a successful build.
+
+`build.sh` now runs `defconfig` in its own make invocation, diffs the `.config` it
+produces against the one the last build used, and dircleans whichever package *declares*
+each changed symbol before building:
+
+```
+== config changed: BR2_PACKAGE_THINGINO_RAPTOR_RMD -> rebuild thingino-raptor
+```
+
+The symbol's owner is found by grepping `package/*/Config.in` for its `config` line, which
+is also its Buildroot target name. The old advice — "just build twice" — never actually
+fixed this; it only helped when the stale artefact happened to be rebuilt for some other
+reason.
 
 ## Flashing
 
@@ -244,7 +265,16 @@ cruise-decelerate seek, identical to ONVIF.
 | `x/motion.cgi` | motion state, zone bitmap, zone mask |
 | `x/video.cgi` | frame rate / bitrate: applies live and persists to `raptor.conf` |
 | `x/mjpeg.cgi` | same-origin MJPEG proxy for rhd (fallback preview) |
+| `x/ch0.jpg`, `x/ch1.jpg` | **override** — ONVIF snapshot URIs, proxied from rhd (`x/snapshot.sh`) |
 | `x/webrtc-whip.cgi` | **override** of raptor's WHIP proxy — see below |
+
+**ONVIF snapshots were dead and nobody noticed.** The stock `x/ch*.jpg` shell out to
+`prudyntctl snapshot`, which does not exist on a raptor build, so every client offering a
+still image — iSpy thumbnails, IP Cam Viewer previews, `GetSnapshotUri` — got an empty
+body. They now proxy rhd's `:8443/snapshot`, the same trick `mjpeg.cgi` uses. `ch1.jpg`
+returns the *same* image as `ch0.jpg`: rhd ignores a channel parameter, verified by
+decoding the JPEG dimensions of both (`1920x1080` either way). `/var/www/onvif/image.cgi`
+is a symlink to `ch0.jpg`, so it is fixed by the same change.
 
 **Presets are shared with ONVIF.** `x/presets.cgi` wraps `/sbin/ptz_presets`
 (`/etc/ptz_presets.conf`), which `onvif.json` already wires to set/get/move/remove — so
@@ -326,6 +356,63 @@ with them.
 > so it is served as plain text rather than executed, and `/` is served straight from
 > `index.html`. Note this also means the UI *shell* loads unauthenticated; every CGI it
 > calls still requires a session, so the page just bounces to `/login.html`.
+
+## Security fixes carried here
+
+These are upstream bugs found while building this firmware, fixed in this layer and worth
+reporting upstream.
+
+### ONVIF `SetPreset`: stack overflow and command injection
+
+`ptz_set_preset()` in `thingino-onvif` had two problems, both reachable by any client
+holding ONVIF credentials:
+
+```c
+char preset_name_out[UUID_LEN + 8];          /* 44 bytes */
+...
+strncpy(preset_name_out, preset_name, strlen(preset_name));   /* == strcpy */
+if (... || strlen(preset_name_out) > 64) { /* reject */ }     /* checked AFTER */
+```
+
+The buffer is 44 bytes, the copy is unbounded, and the length check runs afterwards
+against 64 — so a 50-character name, *legal by that check*, smashes the stack before the
+check happens.
+
+The name is then interpolated into `"/sbin/ptz_presets -a %d %s"` and passed to
+`system()`. The only validation rejected spaces, but shell injection does not need
+spaces: `` `reboot` ``, `$(reboot)`, `;reboot` and `${IFS}` all work.
+[`0002-ptz-fix-setpreset-overflow-and-injection.patch`](tree-overrides/package/all-patches/thingino-onvif/)
+validates before copying — length bounded to the destination, characters whitelisted to
+what survives both a shell word and a `NUM=NAME,X,Y` config line. The *kept* name is
+validated too: with no new name supplied it comes from `ptz_presets.conf` and reaches the
+same `system()` call.
+
+### `ptz_presets`: config corruption via `sed`
+
+The preset name went unquoted into a `sed` replacement:
+
+```sh
+sed -i "s/^$PRESET_NUM=.*/$PRESET_NUM=$PRESET_NAME,$PRESET_X,$PRESET_Y/"
+```
+
+`&` in a name expands to the whole match — a name of `a&b` rewrites slot 3 as
+`3=a3=Garden,500,600b,700,800`, demonstrated. A `/` ends the `s///` expression early and
+the remainder is parsed as flags; busybox sed supports the `w FILE` flag, so `sed` can be
+made to open an attacker-influenced path (the payloads tried also picked up the trailing
+`,X,Y/`, so this was proven as an injection primitive, not as a completed arbitrary
+write).
+
+Two callers reach this script — our CGI, which sanitises, and ONVIF `SetPreset`, which
+does not. So the [override](tree-overrides/package/thingino-motors/files/ptz_presets)
+validates at the point of write instead of trusting callers, and builds the line with
+`awk -v` so no client string is ever interpreted as `sed` syntax.
+
+### Removed rather than fixed
+
+The [image prune](#image-prune) deletes the stock `json-*.cgi` family, which mostly does
+`eval $(echo "$QUERY_STRING" | sed "s/&/;/g")` — post-auth shell injection — along with
+`run.cgi` (arbitrary command execution by design) and `texteditor.cgi`. `x/motors.cgi`
+exists so `json-motor.cgi`, the last one our pages called, could go too.
 
 ## Motion detection
 
