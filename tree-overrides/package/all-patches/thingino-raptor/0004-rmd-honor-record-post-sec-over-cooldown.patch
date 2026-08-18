@@ -1,0 +1,35 @@
+rmd: honor record_post_sec instead of max(record_post_sec, cooldown_sec)
+
+The motion state machine stopped recording max(record_post_sec, cooldown_sec)
+after motion ended, so the WebUI "keep recording after motion" value was
+silently overridden whenever cooldown_sec was larger. With the default
+cooldown_sec = 10 a user's record_post_sec = 2 produced a ~10s tail (a 2s hand
+wave recorded ~18s once the 2s pre-buffer and detector settling are added).
+
+cooldown_sec (re-trigger debounce) and record_post_sec (post-roll) are separate
+concepts; conflating them via max() surprises the user. Make record_post_sec
+authoritative for the post-roll. record_post_sec also bridges brief motion gaps
+(motion resuming within the window returns COOLDOWN -> ACTIVE on the same clip),
+which is the behaviour the post-roll value is expected to control anyway.
+
+diff --git a/rmd/rmd_main.c b/rmd/rmd_main.c
+index 33a7b1b..227b54c 100644
+--- a/rmd/rmd_main.c
++++ b/rmd/rmd_main.c
+@@ -123,9 +123,13 @@ static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
+ 			ctx->last_motion_us = now;
+ 		} else {
+ 			int64_t elapsed_sec = (now - ctx->cooldown_start_us) / 1000000;
+-			int post_sec = ctx->settings.record_post_sec > ctx->settings.cooldown_sec
+-					       ? ctx->settings.record_post_sec
+-					       : ctx->settings.cooldown_sec;
++			/* Keep recording for exactly record_post_sec after motion
++			 * stops — the WebUI "keep recording after motion" knob.
++			 * cooldown_sec used to floor this (whichever was larger), so
++			 * a short post silently inherited a long cooldown: a 2s post
++			 * with the default 10s cooldown recorded a 10s tail. The two
++			 * are different ideas; record_post_sec is authoritative. */
++			int post_sec = ctx->settings.record_post_sec;
+ 			if (elapsed_sec >= post_sec) {
+ 				ctx->state = RMD_STATE_IDLE;
+ 

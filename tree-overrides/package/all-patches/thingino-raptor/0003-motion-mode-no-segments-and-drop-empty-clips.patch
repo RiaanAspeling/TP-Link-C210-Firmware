@@ -1,0 +1,93 @@
+rmr: in motion mode record clips only, and drop stub clips
+
+Two defects surface together when [recording] mode = motion:
+
+1. Motion triggers also wrote continuous SEGMENT files. rmd asserts
+   st->recording on a motion event (the enable/start control handlers set it
+   for RMR_MODE_MOTION), and the record loop used that same flag as the
+   continuous-segment gate. So every motion trigger opened BOTH a motion clip
+   (clips/DATE/..) and a segment (DATE/..) — the segment tree should be empty
+   in motion mode. Gate the continuous writer on mode != MOTION; the clip
+   writer keeps reading st->recording directly, so clips are unaffected.
+
+2. The clip-length cap left a few-KB stub clip. When a clip hits
+   clip_length_sec it rotates and opens a continuation clip if still
+   triggered; if motion then stops the continuation is finalized with only a
+   frame or two (or none) — a file that shows nothing in playback. Track the
+   newest video timestamp and, on close, unlink any clip spanning under 0.5s
+   of video (this also covers the zero-frame case, clip_v_ts_base < 0). A real
+   clip always carries its pre-buffer, so it never lands this short.
+   rmr_storage_enforce_limit rescans the directory each call and keeps no
+   in-memory file list, so removing the file underneath it is safe.
+
+diff --git a/rmr/rmr.h b/rmr/rmr.h
+index 9190e0a..632366a 100644
+--- a/rmr/rmr.h
++++ b/rmr/rmr.h
+@@ -80,6 +80,7 @@ typedef struct {
+ 	int clip_fd;
+ 	char clip_path[256];
+ 	int64_t clip_v_ts_base; /* first video timestamp in clip */
++	int64_t clip_v_ts_last; /* newest video timestamp in clip (span guard) */
+ 	int64_t clip_a_dts;	/* audio DTS counter for clip */
+ 	int64_t clip_a_ts_base; /* ring ts mapping base for clip_a_dts steering */
+ 	int64_t clip_start_us;	/* wall clock when clip opened */
+diff --git a/rmr/rmr_main.c b/rmr/rmr_main.c
+index 9f90d10..24a2328 100644
+--- a/rmr/rmr_main.c
++++ b/rmr/rmr_main.c
+@@ -204,6 +204,7 @@ static int open_clip(rmr_state_t *st)
+ 
+ 	st->clip_fd = fd;
+ 	st->clip_v_ts_base = -1;
++	st->clip_v_ts_last = -1;
+ 	st->clip_a_dts = 0;
+ 	st->clip_a_ts_base = -1;
+ 	st->clip_start_us = rss_timestamp_us();
+@@ -230,10 +231,23 @@ static void close_clip(rmr_state_t *st)
+ 		st->clip_mux = NULL;
+ 	}
+ 	if (st->clip_fd >= 0) {
++		/* A clip with no video (clip_v_ts_base < 0) or under ~0.5s of it
++		 * is the stub the length cap opens when motion has already
++		 * stopped — a few-KB file that plays nothing. A real clip always
++		 * carries its pre-buffer, so it never lands this short. Drop it. */
++		int64_t span = (st->clip_v_ts_base < 0)
++				       ? -1
++				       : st->clip_v_ts_last - st->clip_v_ts_base;
++		bool stub = (span < 500000); /* <0.5s; the -1 empty case too */
+ 		rmr_storage_close_segment(st->clip_fd);
+-		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
+-			  st->clip_bytes);
+ 		st->clip_fd = -1;
++		if (stub && st->clip_path[0]) {
++			unlink(st->clip_path);
++			RSS_INFO("discarded stub motion clip: %s", st->clip_path);
++		} else {
++			RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)",
++				  st->clip_path, st->clip_bytes);
++		}
+ 	}
+ }
+ 
+@@ -246,6 +260,7 @@ static void clip_write_video(rmr_state_t *st, const uint8_t *avcc, uint32_t avcc
+ 
+ 	if (st->clip_v_ts_base < 0)
+ 		st->clip_v_ts_base = timestamp;
++	st->clip_v_ts_last = timestamp;
+ 
+ 	int64_t v_dts = (timestamp - st->clip_v_ts_base) * 90 / 1000;
+ 	rmr_video_sample_t vs = {
+@@ -806,7 +821,11 @@ static void record_loop(rmr_state_t *st)
+ 		}
+ 
+ 		/* ── Continuous recording ── */
+-		bool rec = atomic_load(&st->recording);
++		/* In motion mode st->recording is the clip trigger (set by rmd on
++		 * motion, see the enable/start handlers). The continuous segment
++		 * writer must stay inert there or every trigger also spills a
++		 * segment file alongside the clip. Only continuous/both feed it. */
++		bool rec = atomic_load(&st->recording) && st->mode != RMR_MODE_MOTION;
+ 
+ 		/* Handle stop transition */
+ 		if (was_recording && !rec) {
