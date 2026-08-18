@@ -87,7 +87,7 @@ KEEP_ROOT="index.html login.html"
 KEEP_X="auth.sh session.sh login.cgi logout.cgi session-status.cgi
         ch0.jpg ch1.jpg snapshot.sh legacy-url-recovery.cgi reboot.cgi
         mjpeg.cgi motion.cgi motors.cgi ota.cgi presets.cgi ptz.cgi video.cgi
-        webrtc-whip.cgi"
+        webrtc-whip.cgi sd.cgi clips.cgi"
 
 keeps_root=" $(echo $KEEP_ROOT) "
 keeps_x=" $(echo $KEEP_X) "
@@ -128,7 +128,7 @@ for need in index.html login.html \
             x/auth.sh x/session.sh x/login.cgi x/logout.cgi \
             x/ptz.cgi x/motors.cgi x/presets.cgi x/motion.cgi x/video.cgi \
             x/webrtc-whip.cgi x/mjpeg.cgi x/snapshot.sh x/ch0.jpg x/ch1.jpg \
-            x/ota.cgi; do
+            x/ota.cgi x/sd.cgi x/clips.cgi; do
 	[ -e "$WWW/$need" ] || { echo "lean-prune: FATAL - $need missing after prune"; exit 1; }
 done
 [ -x "$WWW/onvif/onvif.cgi" ] || { echo "lean-prune: FATAL - onvif.cgi missing"; exit 1; }

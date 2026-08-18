@@ -42,6 +42,20 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 .dot.live{background:var(--ok)}
 .dot.bad{background:var(--err)}
 #state{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+/* On-video recording indicator — lives on the stage, NOT in the auto-hiding bar,
+   so it stays visible while you just watch the feed. Dim = armed/enabled,
+   red pulse = a clip is being written right now. */
+#recind{position:fixed;top:52px;left:14px;z-index:5;display:none;align-items:center;gap:6px;
+        font-size:12px;font-weight:600;letter-spacing:.4px;color:#fff;
+        background:#00000066;border:1px solid #ffffff2e;border-radius:999px;
+        padding:4px 10px;backdrop-filter:blur(6px)}
+#recind.show{display:inline-flex}
+#recind .d{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
+#recind.active{border-color:var(--err)}
+#recind.active .d{background:var(--err);animation:recpulse 1.3s ease-in-out infinite}
+#recind.active .lbl{color:#fff}
+#recind .lbl{color:#cfd3da}
+@keyframes recpulse{0%,100%{opacity:1;box-shadow:0 0 0 0 #ff6b6b88}50%{opacity:.5;box-shadow:0 0 0 5px #ff6b6b00}}
 /* One control style across the bar, the pad and the HUD. */
 .bar a,.bar button,.bar select{
   display:inline-block;background:#1e2127cc;color:var(--fg);border:1px solid var(--line);
@@ -110,6 +124,75 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #syspanel button.act.go{border-color:var(--accent)}
 #syspanel button.act.danger{border-color:var(--err);color:var(--err)}
 
+/* SD / recording popover — same shell as the system one */
+#sdpanel{position:fixed;top:48px;right:14px;z-index:4;width:300px;
+         background:#1e2127f2;border:1px solid var(--line);border-radius:10px;
+         padding:14px;backdrop-filter:blur(8px);
+         display:flex;flex-direction:column;gap:10px}
+#sdpanel[hidden]{display:none}
+#sdpanel h2{margin:0;font-size:11px;font-weight:600;color:var(--muted);
+            text-transform:uppercase;letter-spacing:.5px}
+#sdpanel .info{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;
+               line-height:1.5;min-height:1.4em}
+#sdpanel .info b{color:var(--fg);font-weight:600}
+#sdpanel .info .on{color:var(--ok)} #sdpanel .info .off{color:var(--muted)}
+#sdpanel label{display:flex;flex-direction:column;gap:5px;font-size:11px;
+               color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+#sdpanel label.chk{flex-direction:row;align-items:center;gap:8px;text-transform:none;
+                   letter-spacing:0;color:var(--fg);font-size:12px;cursor:pointer}
+#sdpanel select{background:#15171c;color:var(--fg);border:1px solid var(--line);
+                border-radius:6px;padding:7px;font-size:13px;text-transform:none;
+                letter-spacing:0;font-family:inherit;cursor:pointer}
+#sdpanel select:focus{outline:none;border-color:var(--accent)}
+#sdpanel button.act{background:#15171c;color:var(--fg);border:1px solid var(--line);
+                    border-radius:8px;padding:9px;font-size:13px;font-family:inherit;cursor:pointer}
+#sdpanel button.act:hover:not(:disabled){border-color:#3f4650}
+#sdpanel button.act:disabled{opacity:.45;cursor:default}
+#sdpanel button.act.go{border-color:var(--accent)}
+#sdpanel button.act.danger{border-color:var(--err);color:var(--err)}
+#sdpanel .rule{border:none;border-top:1px solid var(--line);margin:2px 0}
+#sdpanel .note{margin:0;font-size:11px;line-height:1.4;color:var(--muted)}
+#sdpanel .note em{color:var(--fg);font-style:normal}
+
+/* full-screen recordings browser */
+#recmodal{position:fixed;inset:0;z-index:6;background:#0b0d10ee;
+          display:flex;flex-direction:column;padding:14px;gap:12px}
+#recmodal[hidden]{display:none}
+#recmodal .recbar{display:flex;align-items:center;gap:10px}
+#recmodal .recbar b{font-size:14px;font-weight:600}
+#recmodal .recbar .sp{flex:1}
+#recmodal .recbar select,#recmodal .recbar button{
+  background:#1e2127;color:var(--fg);border:1px solid var(--line);border-radius:8px;
+  padding:7px 12px;font-size:12px;font-family:inherit;cursor:pointer}
+#recmodal .recbar button:hover,#recmodal .recbar select:hover{border-color:#3f4650}
+#recmodal .recbody{flex:1;display:flex;gap:12px;min-height:0}
+@media (max-width:720px){#recmodal .recbody{flex-direction:column}}
+#recvid{flex:2;min-width:0;min-height:0;background:#000;border-radius:8px;
+        max-height:100%;object-fit:contain}
+#reclist{flex:1;min-width:220px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+#reclist .day{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;
+              margin:2px 0}
+#reclist .clip{display:flex;align-items:center;gap:8px;background:#1e2127;
+               border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer}
+#reclist .clip:hover{border-color:#3f4650}
+#reclist .clip.sel{border-color:var(--accent)}
+#reclist .clip .pick{accent-color:var(--accent);width:16px;height:16px;cursor:pointer;flex:none}
+#recmodal .recbar label{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
+#recmodal .recbar label input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+#recdelsel{color:var(--err);border-color:#5c2f2f}
+#recdelsel:hover{border-color:var(--err)}
+#reclist .clip .t{font-variant-numeric:tabular-nums;font-size:13px;color:var(--fg)}
+#reclist .clip .b{font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--line);
+                  color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+#reclist .clip .b.motion{color:var(--ok);border-color:#2f5c44}
+#reclist .clip .sz{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+#reclist .clip .sp{flex:1}
+#reclist .clip a,#reclist .clip .del{color:var(--muted);text-decoration:none;font-size:13px;
+                                     padding:2px 5px;border-radius:6px;cursor:pointer}
+#reclist .clip a:hover{color:var(--fg)}
+#reclist .clip .del:hover{color:var(--err)}
+#reclist .empty{color:var(--muted);font-size:12px;padding:10px 2px}
+
 /* preset bar, bottom-centre between the HUD and the pad */
 #presets{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:3;
          display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;
@@ -154,6 +237,7 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
 </head>
 <body>
 <div id="stage"><video id="v" autoplay playsinline muted></video><div id="grid"></div></div>
+<div id="recind"><span class="d"></span><span class="lbl">REC</span></div>
 <div id="msg">Connecting…</div>
 
 <div class="bar">
@@ -164,12 +248,13 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
   <button id="sound">Sound: off</button>
   <button id="zones" title="Show motion zones; click again to edit the mask">Zones</button>
   <button id="videobtn" title="Stream, frame rate and bitrate">Video ▾</button>
+  <button id="sdbtn" title="SD card and recording">SD ▾</button>
   <button id="sysbtn" title="Firmware update">System ▾</button>
   <button id="reconnect" title="Reconnect the video stream">Reconnect</button>
   <a href="#" id="logout">Sign out</a>
 </div>
 
-<div id="pad">
+<div id="pad" title="Arrow keys also pan and tilt">
   <span></span>
   <button data-sx="0"  data-sy="1"  aria-label="Tilt up">&#9650;</button>
   <span></span>
@@ -223,6 +308,101 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
      camera reboots on its own. <em class="warn">Do not cut power during the update.</em></p>
 </div>
 
+<div id="sdpanel" hidden>
+  <h2>SD card &amp; recording</h2>
+  <div class="info" id="sdinfo">Checking card…</div>
+  <label class="chk"><input type="checkbox" id="recon"> Record to the SD card</label>
+  <label>Trigger
+    <select id="recmode">
+      <option value="motion">Motion only</option>
+      <option value="continuous">Continuous</option>
+      <option value="both">Continuous + motion</option>
+    </select>
+  </label>
+  <label>Source
+    <select id="recstream">
+      <option value="1">360p sub-stream (light)</option>
+      <option value="0">1080p main stream</option>
+    </select>
+  </label>
+  <label class="chk"><input type="checkbox" id="recaudio"> Record audio</label>
+  <label id="recsenswrap">Motion sensitivity
+    <select id="recsens">
+      <option value="0">Lowest</option>
+      <option value="1">Low</option>
+      <option value="2">Medium</option>
+      <option value="3">High</option>
+      <option value="4">Highest</option>
+    </select>
+  </label>
+  <label id="recpostwrap">Keep recording after motion
+    <select id="recpost">
+      <option value="0">Stop immediately</option>
+      <option value="2">2 seconds</option>
+      <option value="5">5 seconds</option>
+      <option value="10">10 seconds</option>
+      <option value="15">15 seconds</option>
+      <option value="30">30 seconds</option>
+    </select>
+  </label>
+  <label id="recprewrap">Pre-motion buffer
+    <select id="recpre">
+      <option value="0">Off</option>
+      <option value="1">1 second</option>
+      <option value="2">2 seconds</option>
+      <option value="3">3 seconds</option>
+      <option value="5">5 seconds</option>
+    </select>
+  </label>
+  <label>Max clip length
+    <select id="recclip">
+      <option value="10">10 seconds</option>
+      <option value="15">15 seconds</option>
+      <option value="30">30 seconds</option>
+      <option value="60">1 minute</option>
+      <option value="120">2 minutes</option>
+      <option value="300">5 minutes</option>
+    </select>
+  </label>
+  <label>Storage limit
+    <select id="recmax">
+      <option value="1024">1 GB</option>
+      <option value="2048">2 GB</option>
+      <option value="4096">4 GB</option>
+      <option value="8192">8 GB</option>
+      <option value="0">No limit</option>
+    </select>
+  </label>
+  <button class="act go" id="recsave">Apply settings</button>
+  <button class="act" id="recbrowse">Browse recordings…</button>
+  <hr class="rule">
+  <button class="act danger" id="sdformat">Format card…</button>
+  <p class="note" id="recmotionnote">A motion clip length is the <em>pre-motion buffer</em> +
+     the detected movement + the <em>keep recording after motion</em> tail. The detector often
+     keeps seeing motion for a few seconds after you stop (auto-exposure settling), so the clip
+     runs a little past your movement. <em>Max clip length</em> doesn't shorten a clip — it splits
+     a longer event into files of that length, which can leave a short trailing file; raise it to
+     keep an event in one file. Raise <em>sensitivity</em> if motion is missed.</p>
+  <p class="note">Recording muxes the already-encoded stream — no re-encode; the
+     <em>source</em> is what's saved (the sub-stream is far lighter). Formatting
+     <em class="warn">erases everything</em> on the card.</p>
+</div>
+
+<div id="recmodal" hidden>
+  <div class="recbar">
+    <b>Recordings</b>
+    <select id="recdate"></select>
+    <span class="sp"></span>
+    <label id="recselallwrap" hidden><input type="checkbox" id="recselall"> All</label>
+    <button id="recdelsel" hidden>Delete selected</button>
+    <button id="recclose">Close</button>
+  </div>
+  <div class="recbody">
+    <video id="recvid" controls playsinline preload="metadata"></video>
+    <div id="reclist"></div>
+  </div>
+</div>
+
 <div id="presets"></div>
 
 <div id="hud">
@@ -260,6 +440,25 @@ for(const b of document.querySelectorAll('#pad button[data-sx]')){
   b.addEventListener('lostpointercapture',release);
 }
 window.addEventListener('blur',release);
+
+/* Arrow keys drive the same press-and-hold glide as the pad. Key auto-repeat is
+   swallowed by press()'s `held` guard, and any arrow keyup stops. Skipped while
+   typing in a field or while the recordings browser is open (there the arrows
+   belong to the clip player), so normal key behaviour is untouched then. */
+const ARROW_DIR={ArrowUp:[0,1],ArrowDown:[0,-1],ArrowLeft:[-1,0],ArrowRight:[1,0]};
+function typingTarget(el){
+  return !!el && (/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) || el.isContentEditable);
+}
+window.addEventListener('keydown',e=>{
+  const d=ARROW_DIR[e.key];
+  if(!d || e.altKey||e.ctrlKey||e.metaKey) return;
+  if(typingTarget(e.target) || !recModal.hidden) return;
+  e.preventDefault();
+  press(d[0],d[1]);
+});
+window.addEventListener('keyup',e=>{
+  if(ARROW_DIR[e.key] && held){ e.preventDefault(); release(); }
+});
 
 /* absolute/one-shot commands still go through the motors CGI */
 async function motor(q){
@@ -435,18 +634,25 @@ const fpsSel=$('fps'), brSel=$('bitrate');
 quality.value=localStorage.getItem(QKEY)||'0';
 quality.onchange=()=>{ localStorage.setItem(QKEY,quality.value); loadVideoSettings(); connect(); };
 
-const sysPanel=$('syspanel');
+const sysPanel=$('syspanel'), sdPanel=$('sdpanel');
 $('videobtn').onclick=e=>{
   e.stopPropagation();
-  sysPanel.hidden=true;
+  sysPanel.hidden=true; sdPanel.hidden=true;
   panel.hidden=!panel.hidden;
   if(!panel.hidden)loadVideoSettings();
   reveal();
 };
 $('sysbtn').onclick=e=>{
   e.stopPropagation();
-  panel.hidden=true;
+  panel.hidden=true; sdPanel.hidden=true;
   sysPanel.hidden=!sysPanel.hidden;
+  reveal();
+};
+$('sdbtn').onclick=e=>{
+  e.stopPropagation();
+  panel.hidden=true; sysPanel.hidden=true;
+  sdPanel.hidden=!sdPanel.hidden;
+  if(!sdPanel.hidden)loadSdStatus();
   reveal();
 };
 document.addEventListener('click',e=>{
@@ -454,6 +660,8 @@ document.addEventListener('click',e=>{
   // Don't fold the system panel mid-update, or the file choice and progress
   // vanish on the first stray click.
   if(!sysPanel.hidden && !sysPanel.contains(e.target) && !otaBusy)sysPanel.hidden=true;
+  // Same idea while a format is in flight.
+  if(!sdPanel.hidden && !sdPanel.contains(e.target) && !sdBusy)sdPanel.hidden=true;
 });
 
 function nearestOption(sel,val){
@@ -577,7 +785,7 @@ const REVEAL_TOP=96, REVEAL_BOT=210;
 let lastPointerY=0, chromeTouchTimer=null;
 function reveal(){
   const H=window.innerHeight;
-  const keepTop = lastPointerY<REVEAL_TOP || !panel.hidden || !sysPanel.hidden;
+  const keepTop = lastPointerY<REVEAL_TOP || !panel.hidden || !sysPanel.hidden || !sdPanel.hidden;
   const keepBot = lastPointerY>H-REVEAL_BOT || !!held;
   document.body.classList.toggle('show-top', keepTop);
   document.body.classList.toggle('show-bot', keepBot);
@@ -609,7 +817,9 @@ const otaFile=$('otafile'), otaInfo=$('otainfo'), otaGo=$('otago'),
       otaFullWrap=$('otafullwrap'), otaFull=$('otafull'), otaNote=$('otanote');
 
 const hex=buf=>[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
-function fmtBytes(n){ return n>=1048576 ? (n/1048576).toFixed(2)+' MB' : (n/1024).toFixed(0)+' KB'; }
+function fmtBytes(n){ return n>=1073741824 ? (n/1073741824).toFixed(1)+' GB'
+                           : n>=1048576 ? (n/1048576).toFixed(2)+' MB'
+                           : (n/1024).toFixed(0)+' KB'; }
 
 function otaReset(keepPanel){
   otaBuf=null; otaSha=''; otaType='';
@@ -698,10 +908,207 @@ otaGo.onclick=async()=>{
   }
 };
 
+/* ---------- SD card & recording ------------------------------------------
+   sd.cgi owns card status + the rmr recording daemon (enable/disable, config,
+   format); clips.cgi lists and serves the .mp4s. Both are authenticated CGIs —
+   recordings are never exposed as static docroot files, so the login actually
+   gates them. */
+let sdBusy=false;
+const recon=$('recon'), recmode=$('recmode'), recstream=$('recstream'),
+      recaudio=$('recaudio'), recclip=$('recclip'), recmax=$('recmax'), sdInfo=$('sdinfo'),
+      recsens=$('recsens'), recpost=$('recpost'), recpre=$('recpre');
+
+// Sensitivity / post-motion / pre-buffer only matter when motion is a trigger.
+function paintRecMode(){
+  const motion = recmode.value==='motion' || recmode.value==='both';
+  for(const el of ['recsenswrap','recpostwrap','recprewrap',
+                   'recmotionnote']) $(el).style.display = motion?'':'none';
+}
+recmode.addEventListener('change',paintRecMode);
+
+async function sdApi(qs,opts){
+  const r=await fetch('/x/sd.cgi'+(qs?('?'+qs):''),Object.assign({cache:'no-store'},opts||{}));
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
+}
+function selNear(sel,val){ for(const o of sel.options) if(o.value==val){sel.value=o.value;return;} }
+
+async function loadSdStatus(){
+  sdInfo.textContent='Checking card…';
+  const j=await sdApi('');
+  if(!j||!j.ok){ sdInfo.innerHTML='<span class="off">Status unavailable.</span>'; return; }
+  const c=j.card||{}, cfg=j.cfg||{};
+  if(!c.present)       sdInfo.innerHTML='<span class="off">No SD card detected.</span>';
+  else if(!c.mounted) sdInfo.innerHTML='<span class="off">Card present but not mounted.</span>';
+  else{
+    const used=fmtBytes((c.used_kb||0)*1024), tot=fmtBytes((c.size_kb||0)*1024);
+    const on=cfg.enabled===true;
+    sdInfo.innerHTML=(c.fstype||'?')+' · <b>'+used+'</b> of '+tot+' used · recording '
+      +(on?'<b class="on">on</b>':'<span class="off">off</span>');
+  }
+  const m=j.motion||{};
+  recon.checked = cfg.enabled===true;
+  if(cfg.mode) selNear(recmode,cfg.mode);
+  if(cfg.stream!=null) selNear(recstream,cfg.stream);
+  recaudio.checked = cfg.audio!==false;
+  if(m.sensitivity!=null) selNear(recsens,m.sensitivity);
+  if(m.record_post_sec!=null) selNear(recpost,m.record_post_sec);
+  if(cfg.prebuffer_sec!=null) selNear(recpre,cfg.prebuffer_sec);
+  if(cfg.clip_length_sec) selNear(recclip,cfg.clip_length_sec);
+  if(cfg.max_storage_mb!=null) selNear(recmax,cfg.max_storage_mb);
+  paintRecMode();
+}
+
+$('recsave').onclick=async()=>{
+  if(sdBusy)return;
+  sdBusy=true; const btn=$('recsave'), was=btn.textContent;
+  btn.disabled=true; btn.textContent='Applying…';
+  const body='enabled='+(recon.checked?1:0)
+    +'&mode='+encodeURIComponent(recmode.value)
+    +'&stream='+recstream.value
+    +'&audio='+(recaudio.checked?1:0)
+    +'&sensitivity='+recsens.value
+    +'&record_post_sec='+recpost.value
+    +'&prebuffer_sec='+recpre.value
+    +'&clip_length_sec='+recclip.value
+    +'&max_storage_mb='+recmax.value;
+  const j=await sdApi('a=config',{method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  sdBusy=false; btn.disabled=false; btn.textContent=was;
+  if(!j||!j.ok){ sdInfo.innerHTML='<span class="off">Apply failed'+(j&&j.error?': '+j.error:'')+'</span>'; return; }
+  loadSdStatus(); pollRec();
+};
+
+/* On-video REC indicator — cheap poll of sd.cgi?a=recstate. Hidden when
+   recording is off; dim "READY" when armed/enabled; red pulsing "REC" while a
+   clip is actually being written (a motion clip in progress, or continuous). */
+const recInd=$('recind'), recIndLbl=recInd.querySelector('.lbl');
+async function pollRec(){
+  let j=null;
+  try{ const r=await fetch('/x/sd.cgi?a=recstate',{cache:'no-store'});
+       if(r.ok) j=await r.json().catch(()=>null); }catch(_){}
+  if(!j||!j.ok||!j.on){ recInd.classList.remove('show','active'); return; }
+  recInd.classList.add('show');
+  recInd.classList.toggle('active', j.active===true);
+  recIndLbl.textContent = j.active ? 'REC' : 'READY';
+  recInd.title = j.active ? 'Recording a clip to the SD card' : 'Recording armed — waiting for motion';
+}
+
+$('sdformat').onclick=async()=>{
+  if(sdBusy)return;
+  if(!confirm('Format the SD card? This ERASES every recording on it and cannot be undone.'))return;
+  sdBusy=true; const btn=$('sdformat'), was=btn.textContent;
+  btn.disabled=true; btn.textContent='Formatting…';
+  const j=await sdApi('a=format',{method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'confirm=ERASE'});
+  sdBusy=false; btn.disabled=false; btn.textContent=was;
+  if(!j||!j.ok){ sdInfo.innerHTML='<span class="off">Format failed'+(j&&j.error?': '+j.error:'')+'</span>'; return; }
+  loadSdStatus();
+};
+
+/* ---------- recordings browser (full-screen modal) ---------------------- */
+const recModal=$('recmodal'), recDate=$('recdate'), recList=$('reclist'), recVid=$('recvid');
+$('recbrowse').onclick=()=>{ sdPanel.hidden=true; openRecordings(); };
+$('recclose').onclick=closeRecordings;
+function closeRecordings(){ recVid.pause(); recVid.removeAttribute('src'); recVid.load(); recModal.hidden=true; }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&!recModal.hidden)closeRecordings(); });
+
+async function clipsApi(qs){
+  const r=await fetch('/x/clips.cgi?'+qs,{cache:'no-store'});
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
+}
+async function openRecordings(){
+  recModal.hidden=false;
+  recList.innerHTML='<div class="empty">Loading…</div>';
+  const j=await clipsApi('a=dates');
+  recDate.innerHTML='';
+  if(!j||!j.ok||!j.dates.length){ recList.innerHTML='<div class="empty">No recordings yet.</div>'; return; }
+  for(const d of j.dates){
+    const o=document.createElement('option');
+    o.value=d.date; o.textContent=d.date+' · '+(d.motion+d.segment)+' clips';
+    recDate.appendChild(o);
+  }
+  recDate.value=j.dates[j.dates.length-1].date;   // newest day first
+  loadDay();
+}
+recDate.onchange=loadDay;
+async function loadDay(){
+  recList.innerHTML='<div class="empty">Loading…</div>';
+  const j=await clipsApi('a=list&date='+encodeURIComponent(recDate.value));
+  if(!j||!j.ok||!j.files.length){ recList.innerHTML='<div class="empty">No clips for this day.</div>'; updateSelCount(); return; }
+  recList.innerHTML='';
+  for(const f of j.files){
+    const url='/x/clips.cgi?a=get&f='+encodeURIComponent(f.f);
+    const row=document.createElement('div'); row.className='clip'; row.dataset.f=f.f;
+    row.innerHTML='<input type="checkbox" class="pick" title="Select">'
+      +'<span class="t">'+f.time+'</span>'
+      +'<span class="b'+(f.type==='motion'?' motion':'')+'">'+f.type+'</span>'
+      +'<span class="sp"></span><span class="sz">'+fmtBytes(f.bytes)+'</span>'
+      +'<a title="Download" href="'+url+'" download="'+recDate.value+'_'+f.time.replace(/:/g,'-')+'_'+f.type+'.mp4">⤓</a>'
+      +'<span class="del" title="Delete">✕</span>';
+    // The whole row plays; the checkbox, download link and delete opt out.
+    row.onclick=()=>playClip(url,row);
+    const pick=row.querySelector('.pick');
+    pick.onclick=e=>e.stopPropagation();
+    pick.onchange=updateSelCount;
+    row.querySelector('a').onclick=e=>e.stopPropagation();
+    row.querySelector('.del').onclick=e=>{ e.stopPropagation(); delClip(f,row); };
+    recList.appendChild(row);
+  }
+  updateSelCount();
+}
+function selectedRows(){
+  return [...recList.querySelectorAll('.clip')].filter(r=>r.querySelector('.pick').checked);
+}
+function updateSelCount(){
+  const boxes=recList.querySelectorAll('.pick'), n=selectedRows().length;
+  const del=$('recdelsel'), allWrap=$('recselallwrap'), all=$('recselall');
+  allWrap.hidden = boxes.length===0;
+  del.hidden = n===0;
+  del.textContent = 'Delete selected ('+n+')';
+  all.checked = boxes.length>0 && n===boxes.length;
+}
+$('recselall').onchange=e=>{
+  recList.querySelectorAll('.pick').forEach(c=>{ c.checked=e.target.checked; });
+  updateSelCount();
+};
+$('recdelsel').onclick=async()=>{
+  const rows=selectedRows(); if(!rows.length)return;
+  if(!confirm('Delete '+rows.length+' selected recording'+(rows.length>1?'s':'')+'?'))return;
+  const files=rows.map(r=>r.dataset.f);
+  const body='files='+files.map(encodeURIComponent).join(',');
+  const r=await fetch('/x/clips.cgi?a=delbatch',{method:'POST',cache:'no-store',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  if(r.status===401||r.status===403){location.replace('/login.html');return;}
+  const j=await r.json().catch(()=>null);
+  if(j&&j.ok){
+    rows.forEach(x=>x.remove());
+    updateSelCount();
+    if(!recList.children.length)recList.innerHTML='<div class="empty">No clips for this day.</div>';
+    if(j.failed)alert(j.failed+' recording'+(j.failed>1?'s':'')+' could not be deleted');
+  } else alert('Delete failed'+(j&&j.error?': '+j.error:''));
+};
+function playClip(url,row){
+  recList.querySelectorAll('.clip.sel').forEach(x=>x.classList.remove('sel'));
+  row.classList.add('sel');
+  recVid.src=url; recVid.play().catch(()=>{});
+}
+async function delClip(f,row){
+  if(!confirm('Delete the clip at '+f.time+'?'))return;
+  const r=await fetch('/x/clips.cgi?a=del&f='+encodeURIComponent(f.f),{method:'POST',cache:'no-store'});
+  if(r.status===401||r.status===403){location.replace('/login.html');return;}
+  const j=await r.json().catch(()=>null);
+  if(j&&j.ok){ row.remove(); if(!recList.children.length)recList.innerHTML='<div class="empty">No clips for this day.</div>'; }
+  else alert('Delete failed'+(j&&j.error?': '+j.error:''));
+}
+
 connect();
 poll();
 loadPresets();
+pollRec();
 setInterval(poll,2000);
+setInterval(pollRec,2000);   // on-video REC indicator
 setInterval(pollMotion,700);   // fast enough to see a zone flash, cheap enough to leave running
 </script>
 </body>
