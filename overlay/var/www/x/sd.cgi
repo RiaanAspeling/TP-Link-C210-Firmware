@@ -171,7 +171,8 @@ emit_status() {
 # enabled and the daemon is up; `active` = a clip/segment is being written right
 # now (motion clip in progress, or continuous always-on).
 emit_recstate() {
-	local on=false active=false rec
+	local on=false active=false card=false rec
+	sd_mounted && card=true
 	if pidof rmr >/dev/null 2>&1; then
 		on=true
 		rec=$(raptorctl rmr status 2>/dev/null)
@@ -180,7 +181,7 @@ emit_recstate() {
 		esac
 	fi
 	json_header "200 OK"
-	printf '{"ok":true,"on":%s,"active":%s}\n' "$on" "$active"
+	printf '{"ok":true,"on":%s,"active":%s,"card":%s}\n' "$on" "$active" "$card"
 	exit 0
 }
 

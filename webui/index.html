@@ -19,20 +19,20 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #stage{position:fixed;inset:0;background:#000}
 #v{width:100%;height:100%;object-fit:contain;display:block;background:#000}
 
-/* Motion zone grid, laid over the video. Hidden unless the user turns it on.
-   Sized to the video's real letterboxed rect, not the whole stage.
-   position:fixed so getBoundingClientRect() coordinates apply directly;
-   z-index 2 keeps it above the video but under the bar/pad/presets (all 3). */
-#grid{position:fixed;display:none;pointer-events:none;z-index:2}
-#grid.show{display:grid}
-#grid.edit{pointer-events:auto}
-#grid .z{border:1px solid #ffffff14;transition:background .18s,border-color .18s}
-#grid .z.hit{background:#3ddc8433;border-color:#3ddc84aa}
-#grid.edit .z{cursor:pointer;border-color:#ffffff2e}
-#grid.edit .z:hover{border-color:#fff6}
-#grid .z.off{background:#0009}
-#grid.edit .z.off{background:#ff6b6b26;border-color:#ff6b6b55}
-#grid .z.off.hit{background:#ff6b6b1f;border-color:#ff6b6b55}
+/* Motion zone editor: a still snapshot with a clickable grid over it, in the
+   Motion settings tab (replaces the old live-video overlay). */
+.mzframe{position:relative;width:100%;max-width:480px;aspect-ratio:16/9;
+  background:#0c0e12;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.mzframe #mzsnap{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.mzgrid{position:absolute;inset:0;display:grid}
+.mzgrid .z{border:1px solid #ffffff22;cursor:pointer;transition:background .18s,border-color .18s}
+.mzgrid .z:hover{border-color:#fff6}
+.mzgrid .z.hit{background:#3ddc8433;border-color:#3ddc84aa}
+.mzgrid .z.off{background:#ff6b6b3a;border-color:#ff6b6b66}
+.mzgrid .z.off.hit{background:#ff6b6b2a}
+.mzhint2{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);
+  font-size:12px;pointer-events:none}
+.mzbar{display:flex;gap:10px}
 
 .bar{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:10px;
      padding:10px 14px;background:linear-gradient(#000c,#0000);z-index:3}
@@ -97,63 +97,6 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #videopanel .note{margin:0;font-size:11px;line-height:1.4;color:var(--muted)}
 #videopanel .note em{color:var(--fg);font-style:normal}
 
-/* system / OTA popover — same shell as the video one, a touch wider */
-#syspanel{position:fixed;top:48px;right:14px;z-index:4;width:290px;
-          background:#1e2127f2;border:1px solid var(--line);border-radius:10px;
-          padding:14px;backdrop-filter:blur(8px);
-          display:flex;flex-direction:column;gap:11px}
-#syspanel[hidden]{display:none}
-#syspanel h2{margin:0;font-size:11px;font-weight:600;color:var(--muted);
-             text-transform:uppercase;letter-spacing:.5px}
-#syspanel .note{margin:0;font-size:11px;line-height:1.4;color:var(--muted)}
-#syspanel .note em{color:var(--fg);font-style:normal}
-#syspanel .warn{color:var(--err)}
-#syspanel input[type=file]{font-size:12px;color:var(--muted);width:100%}
-#syspanel input[type=file]::file-selector-button{
-  background:#15171c;color:var(--fg);border:1px solid var(--line);border-radius:6px;
-  padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;margin-right:8px}
-#syspanel .info{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;
-                line-height:1.4;min-height:1.4em}
-#syspanel .info b{color:var(--fg);font-weight:600}
-#syspanel label.chk{flex-direction:row;align-items:center;gap:8px;text-transform:none;
-                    letter-spacing:0;color:var(--err);font-size:12px;cursor:pointer}
-#syspanel button.act{background:#15171c;color:var(--fg);border:1px solid var(--line);
-                     border-radius:8px;padding:9px;font-size:13px;font-family:inherit;cursor:pointer}
-#syspanel button.act:hover:not(:disabled){border-color:#3f4650}
-#syspanel button.act:disabled{opacity:.45;cursor:default}
-#syspanel button.act.go{border-color:var(--accent)}
-#syspanel button.act.danger{border-color:var(--err);color:var(--err)}
-
-/* SD / recording popover — same shell as the system one */
-#sdpanel{position:fixed;top:48px;right:14px;z-index:4;width:300px;
-         background:#1e2127f2;border:1px solid var(--line);border-radius:10px;
-         padding:14px;backdrop-filter:blur(8px);
-         display:flex;flex-direction:column;gap:10px}
-#sdpanel[hidden]{display:none}
-#sdpanel h2{margin:0;font-size:11px;font-weight:600;color:var(--muted);
-            text-transform:uppercase;letter-spacing:.5px}
-#sdpanel .info{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;
-               line-height:1.5;min-height:1.4em}
-#sdpanel .info b{color:var(--fg);font-weight:600}
-#sdpanel .info .on{color:var(--ok)} #sdpanel .info .off{color:var(--muted)}
-#sdpanel label{display:flex;flex-direction:column;gap:5px;font-size:11px;
-               color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-#sdpanel label.chk{flex-direction:row;align-items:center;gap:8px;text-transform:none;
-                   letter-spacing:0;color:var(--fg);font-size:12px;cursor:pointer}
-#sdpanel select{background:#15171c;color:var(--fg);border:1px solid var(--line);
-                border-radius:6px;padding:7px;font-size:13px;text-transform:none;
-                letter-spacing:0;font-family:inherit;cursor:pointer}
-#sdpanel select:focus{outline:none;border-color:var(--accent)}
-#sdpanel button.act{background:#15171c;color:var(--fg);border:1px solid var(--line);
-                    border-radius:8px;padding:9px;font-size:13px;font-family:inherit;cursor:pointer}
-#sdpanel button.act:hover:not(:disabled){border-color:#3f4650}
-#sdpanel button.act:disabled{opacity:.45;cursor:default}
-#sdpanel button.act.go{border-color:var(--accent)}
-#sdpanel button.act.danger{border-color:var(--err);color:var(--err)}
-#sdpanel .rule{border:none;border-top:1px solid var(--line);margin:2px 0}
-#sdpanel .note{margin:0;font-size:11px;line-height:1.4;color:var(--muted)}
-#sdpanel .note em{color:var(--fg);font-style:normal}
-
 /* full-screen recordings browser */
 #recmodal{position:fixed;inset:0;z-index:6;background:#0b0d10ee;
           display:flex;flex-direction:column;padding:14px;gap:12px}
@@ -161,15 +104,26 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #recmodal .recbar{display:flex;align-items:center;gap:10px}
 #recmodal .recbar b{font-size:14px;font-weight:600}
 #recmodal .recbar .sp{flex:1}
-#recmodal .recbar select,#recmodal .recbar button{
+#recmodal .recbar select,#recmodal .recbar button,#recmodal .recactions button{
   background:#1e2127;color:var(--fg);border:1px solid var(--line);border-radius:8px;
   padding:7px 12px;font-size:12px;font-family:inherit;cursor:pointer}
-#recmodal .recbar button:hover,#recmodal .recbar select:hover{border-color:#3f4650}
+#recmodal .recbar button:hover,#recmodal .recbar select:hover,#recmodal .recactions button:hover{border-color:#3f4650}
+#recmodal .recbar button.danger,#recmodal .recactions button.danger{color:var(--err);border-color:#5c2f2f}
+#recmodal .recbar button.danger:hover,#recmodal .recactions button.danger:hover{border-color:var(--err)}
+.recstatus{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 #recmodal .recbody{flex:1;display:flex;gap:12px;min-height:0}
 @media (max-width:720px){#recmodal .recbody{flex-direction:column}}
 #recvid{flex:2;min-width:0;min-height:0;background:#000;border-radius:8px;
         max-height:100%;object-fit:contain}
-#reclist{flex:1;min-width:220px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+/* left column: scrolling file list on top, action buttons pinned at the bottom */
+.reccol{flex:1;min-width:240px;min-height:0;display:flex;flex-direction:column;gap:8px}
+.reclisthead{flex:none;display:flex;align-items:center;gap:8px;padding:2px 11px;
+  font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.reclisthead input{accent-color:var(--accent);width:16px;height:16px;cursor:pointer;flex:none}
+.reclisthead .sp{flex:1}
+.recactions{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.recactions .sp{flex:1}
+#reclist{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
 #reclist .day{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;
               margin:2px 0}
 #reclist .clip{display:flex;align-items:center;gap:8px;background:#1e2127;
@@ -177,8 +131,8 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #reclist .clip:hover{border-color:#3f4650}
 #reclist .clip.sel{border-color:var(--accent)}
 #reclist .clip .pick{accent-color:var(--accent);width:16px;height:16px;cursor:pointer;flex:none}
-#recmodal .recbar label{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
-#recmodal .recbar label input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+#recmodal .recbar label,#recmodal .recactions label{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
+#recmodal .recbar label input,#recmodal .recactions label input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
 #recdelsel{color:var(--err);border-color:#5c2f2f}
 #recdelsel:hover{border-color:var(--err)}
 #reclist .clip .t{font-variant-numeric:tabular-nums;font-size:13px;color:var(--fg)}
@@ -192,6 +146,117 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 #reclist .clip a:hover{color:var(--fg)}
 #reclist .clip .del:hover{color:var(--err)}
 #reclist .empty{color:var(--muted);font-size:12px;padding:10px 2px}
+/* folders in the recordings file manager + breadcrumb path */
+#reclist .dir{display:flex;align-items:center;gap:8px;background:#1e2127;
+              border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer}
+#reclist .dir:hover{border-color:#3f4650}
+#reclist .dir .pick,#reclist .clip .pick{flex:none}
+#reclist .dir .t{font-size:13px;color:var(--fg)}
+#reclist .dir .sz{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+#reclist .dir .sp{flex:1}
+#reclist .ic{flex:none;font-size:14px;opacity:.9}
+#reclist .ren,#reclist .dir .del{color:var(--muted);font-size:13px;padding:2px 5px;border-radius:6px;cursor:pointer}
+#reclist .ren:hover{color:var(--fg)}
+#reclist .dir .del:hover{color:var(--err)}
+.recpath{font-size:12px;color:var(--muted);display:flex;align-items:center;flex-wrap:wrap;gap:2px;min-width:0}
+.recpath .crumb{color:var(--accent);cursor:pointer}
+.recpath .crumb:hover{text-decoration:underline}
+
+/* full-screen settings screen */
+#setmodal{position:fixed;inset:0;z-index:6;background:#0b0d10f2;
+          display:flex;flex-direction:column;padding:14px;gap:12px}
+#setmodal[hidden]{display:none}
+#setmodal .setbar{display:flex;align-items:center;gap:10px}
+#setmodal .setbar b{font-size:14px;font-weight:600}
+#setmodal .setbar .setname{font-size:12px;color:var(--muted)}
+#setmodal .setbar .sp{flex:1}
+#setmodal .setbar button{background:#1e2127;color:var(--fg);border:1px solid var(--line);
+  border-radius:8px;padding:7px 12px;font-size:12px;font-family:inherit;cursor:pointer}
+#setmodal .setbar button:hover{border-color:#3f4650}
+.setwrap{flex:1;display:flex;gap:14px;min-height:0;width:100%;max-width:1040px;margin:0 auto}
+.setnav{display:flex;flex-direction:column;gap:4px;width:170px;flex:none;overflow-y:auto}
+.setnav .setnavbtn{text-align:left;background:transparent;color:var(--fg);border:1px solid transparent;
+  border-radius:8px;padding:9px 12px;font-size:13px;font-family:inherit;cursor:pointer}
+.setnav .setnavbtn:hover{background:#1a1d22}
+.setnav .setnavbtn.active{background:#1e2127;border-color:var(--accent)}
+.setbody{flex:1;min-width:0;overflow:hidden;background:#16181d;border:1px solid var(--line);
+  border-radius:10px;display:flex}
+@media (max-width:720px){
+  .setwrap{flex-direction:column}
+  .setnav{flex-direction:row;width:auto;flex-wrap:wrap}
+}
+.setsec{display:none;flex:1;min-height:0;flex-direction:column}
+.setsec.active{display:flex}
+/* content scrolls in a centred column; the action footer stays pinned at the
+   bottom as a full-width bar, but its buttons sit in a matching centred column
+   so the primary action lines up with the form (not floating far right). */
+.seccontent{flex:1;min-height:0;overflow-y:auto;padding:18px 20px;
+  display:flex;flex-direction:column;gap:12px;width:100%;max-width:620px;margin:0 auto}
+.setfoot{flex:none;display:flex;justify-content:center;
+  padding:12px 0;border-top:1px solid var(--line);background:#14161a}
+.setfootinner{width:100%;max-width:620px;box-sizing:border-box;padding:0 20px;
+  display:flex;align-items:center;gap:10px}
+.setfoot .sp{flex:1}
+.setsec h2{margin:0;font-size:11px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.6px}
+.setsec label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.5px}
+.setsec label.chk{flex-direction:row;align-items:center;gap:8px;text-transform:none;
+  letter-spacing:normal;font-size:13px;color:var(--fg);cursor:pointer}
+.setsec label.chk input{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
+.setsec select,.setsec input[type=text],.setsec input[type=password]{
+  background:#15171c;color:var(--fg);border:1px solid var(--line);border-radius:6px;
+  padding:8px 10px;font-size:14px;font-family:inherit}
+.setsec select:focus,.setsec input:focus{outline:none;border-color:var(--accent)}
+.setsec input[type=file]{font-size:12px;color:var(--muted);width:100%}
+.setsec input[type=file]::file-selector-button{background:#15171c;color:var(--fg);
+  border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin-right:10px;cursor:pointer}
+.setsec .info{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.5}
+.setsec .info b{color:var(--fg);font-weight:600}
+.setsec .info .on{color:var(--ok)} .setsec .info .off{color:var(--muted)}
+.setsec .note{margin:0;font-size:11px;line-height:1.5;color:var(--muted)}
+.setsec .note em{color:var(--fg);font-style:normal}
+.setsec .note.ok{color:var(--ok)} .setsec .note.bad{color:var(--err)}
+.setsec .note a,.setsec .info a{color:var(--accent);text-decoration:underline;word-break:break-all}
+.setsec .warn{color:var(--err)}
+.setsec button.act{background:#15171c;color:var(--fg);border:1px solid var(--line);
+  border-radius:6px;padding:9px 12px;font-size:13px;font-family:inherit;cursor:pointer;text-align:left}
+.setsec button.act:hover:not(:disabled){border-color:#3f4650}
+.setsec button.act:disabled{opacity:.45;cursor:default}
+.setsec button.act.go{border-color:var(--accent)}
+.setsec button.act.danger{border-color:var(--err);color:var(--err)}
+.setsec .rule{border:none;border-top:1px solid var(--line);margin:4px 0;width:100%}
+/* per-element overlay rows */
+/* visual overlay editor: a 16:9 dummy frame with elements at their positions */
+.osdframe{position:relative;width:100%;max-width:480px;aspect-ratio:16/9;
+  background:#0c0e12 linear-gradient(135deg,#15171c,#0c0e12);border:1px solid var(--line);
+  border-radius:8px;overflow:hidden;font-variant-numeric:tabular-nums}
+.osdframe .osdhint{position:absolute;inset:0;display:grid;place-items:center;
+  color:var(--muted);font-size:12px}
+.osdframe .oel{position:absolute;white-space:nowrap;cursor:pointer;line-height:1;
+  padding:2px 4px;border:1px solid transparent;border-radius:4px;max-width:60%;overflow:hidden;
+  text-overflow:ellipsis}
+.osdframe .oel:hover{border-color:#ffffff55}
+.osdframe .oel.sel{border-color:var(--accent);background:#3d7dff22}
+.osdframe .oel.hiddenel{opacity:.35;text-decoration:line-through}
+.osdframe .oel.logo{color:var(--muted);border:1px dashed #ffffff44;font-size:10px;letter-spacing:.5px}
+/* position anchors inside the frame */
+.osdframe .p-top_left{top:5%;left:3%}
+.osdframe .p-top_center{top:5%;left:50%;transform:translateX(-50%)}
+.osdframe .p-top_right{top:5%;right:3%}
+.osdframe .p-bottom_left{bottom:5%;left:3%}
+.osdframe .p-bottom_center{bottom:5%;left:50%;transform:translateX(-50%)}
+.osdframe .p-bottom_right{bottom:5%;right:3%}
+.osdframe .p-center{top:50%;left:50%;transform:translate(-50%,-50%)}
+.osdeditor{border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  display:flex;flex-direction:column;gap:9px}
+.osdeditor[hidden]{display:none}
+.osdedhd{display:flex;align-items:center;gap:10px}
+.osdedhd #osdedname{font-size:13px;color:var(--fg);font-weight:600;text-transform:capitalize}
+.osdgrid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.osdgrid2 label{font-size:10px}
+.osdeditor input[type=color]{width:100%;height:32px;background:#15171c;border:1px solid var(--line);
+  border-radius:6px;padding:2px;cursor:pointer}
 
 /* preset bar, bottom-centre between the HUD and the pad */
 #presets{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:3;
@@ -236,20 +301,19 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
 </style>
 </head>
 <body>
-<div id="stage"><video id="v" autoplay playsinline muted></video><div id="grid"></div></div>
+<div id="stage"><video id="v" autoplay playsinline muted></video></div>
 <div id="recind"><span class="d"></span><span class="lbl">REC</span></div>
 <div id="msg">Connecting…</div>
 
 <div class="bar">
   <span class="dot" id="dot"></span>
-  <h1>Camera</h1>
+  <h1 id="camname">Camera</h1>
   <span id="state"></span>
   <span class="sp"></span>
   <button id="sound">Sound: off</button>
-  <button id="zones" title="Show motion zones; click again to edit the mask">Zones</button>
   <button id="videobtn" title="Stream, frame rate and bitrate">Video ▾</button>
-  <button id="sdbtn" title="SD card and recording">SD ▾</button>
-  <button id="sysbtn" title="Firmware update">System ▾</button>
+  <button id="recbtn" title="Browse SD-card recordings" hidden>🎞 Recordings</button>
+  <button id="setbtn" title="Settings — device, account, overlays, recording, SD card, motion">⚙ Settings</button>
   <button id="reconnect" title="Reconnect the video stream">Reconnect</button>
   <a href="#" id="logout">Sign out</a>
 </div>
@@ -294,112 +358,320 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
      RTSP, ONVIF, recordings — and are saved. The stream choice is only for this browser.</p>
 </div>
 
-<div id="syspanel" hidden>
-  <h2>Firmware update</h2>
-  <input type="file" id="otafile" accept=".bin,.squashfs,application/octet-stream">
-  <div class="info" id="otainfo">Choose a <b>rootfs.squashfs</b> (recommended) or a full <b>.bin</b>.</div>
-  <label class="chk" id="otafullwrap" hidden>
-    <input type="checkbox" id="otafull">
-    Full image — rewrites the bootloader. Can brick the camera.
-  </label>
-  <button class="act go" id="otago" disabled>Update firmware</button>
-  <p class="note" id="otanote">The image is checksummed in your browser and re-checked on the
-     camera before anything is written. A rootfs update keeps your wifi and password; the
-     camera reboots on its own. <em class="warn">Do not cut power during the update.</em></p>
-</div>
+<div id="setmodal" hidden>
+  <div class="setbar">
+    <b>Settings</b>
+    <span id="setname" class="setname"></span>
+    <span class="sp"></span>
+    <button id="setclose">Close</button>
+  </div>
+  <div class="setwrap">
+    <nav class="setnav">
+      <button class="setnavbtn" data-sec="account">Account &amp; access</button>
+      <button class="setnavbtn" data-sec="overlays">Overlays</button>
+      <button class="setnavbtn" data-sec="recording">Recording</button>
+      <button class="setnavbtn" data-sec="motion">Motion</button>
+      <button class="setnavbtn" data-sec="network">Network</button>
+      <button class="setnavbtn" data-sec="device">Device &amp; system</button>
+    </nav>
+    <div class="setbody">
 
-<div id="sdpanel" hidden>
-  <h2>SD card &amp; recording</h2>
-  <div class="info" id="sdinfo">Checking card…</div>
-  <label class="chk"><input type="checkbox" id="recon"> Record to the SD card</label>
-  <label>Trigger
-    <select id="recmode">
-      <option value="motion">Motion only</option>
-      <option value="continuous">Continuous</option>
-      <option value="both">Continuous + motion</option>
-    </select>
-  </label>
-  <label>Source
-    <select id="recstream">
-      <option value="1">360p sub-stream (light)</option>
-      <option value="0">1080p main stream</option>
-    </select>
-  </label>
-  <label class="chk"><input type="checkbox" id="recaudio"> Record audio</label>
-  <label id="recsenswrap">Motion sensitivity
-    <select id="recsens">
-      <option value="0">Lowest</option>
-      <option value="1">Low</option>
-      <option value="2">Medium</option>
-      <option value="3">High</option>
-      <option value="4">Highest</option>
-    </select>
-  </label>
-  <label id="recpostwrap">Keep recording after motion
-    <select id="recpost">
-      <option value="0">Stop immediately</option>
-      <option value="2">2 seconds</option>
-      <option value="5">5 seconds</option>
-      <option value="10">10 seconds</option>
-      <option value="15">15 seconds</option>
-      <option value="30">30 seconds</option>
-    </select>
-  </label>
-  <label id="recprewrap">Pre-motion buffer
-    <select id="recpre">
-      <option value="0">Off</option>
-      <option value="1">1 second</option>
-      <option value="2">2 seconds</option>
-      <option value="3">3 seconds</option>
-      <option value="5">5 seconds</option>
-    </select>
-  </label>
-  <label>Max clip length
-    <select id="recclip">
-      <option value="10">10 seconds</option>
-      <option value="15">15 seconds</option>
-      <option value="30">30 seconds</option>
-      <option value="60">1 minute</option>
-      <option value="120">2 minutes</option>
-      <option value="300">5 minutes</option>
-    </select>
-  </label>
-  <label>Storage limit
-    <select id="recmax">
-      <option value="1024">1 GB</option>
-      <option value="2048">2 GB</option>
-      <option value="4096">4 GB</option>
-      <option value="8192">8 GB</option>
-      <option value="0">No limit</option>
-    </select>
-  </label>
-  <button class="act go" id="recsave">Apply settings</button>
-  <button class="act" id="recbrowse">Browse recordings…</button>
-  <hr class="rule">
-  <button class="act danger" id="sdformat">Format card…</button>
-  <p class="note" id="recmotionnote">A motion clip length is the <em>pre-motion buffer</em> +
-     the detected movement + the <em>keep recording after motion</em> tail. The detector often
-     keeps seeing motion for a few seconds after you stop (auto-exposure settling), so the clip
-     runs a little past your movement. <em>Max clip length</em> doesn't shorten a clip — it splits
-     a longer event into files of that length, which can leave a short trailing file; raise it to
-     keep an event in one file. Raise <em>sensitivity</em> if motion is missed.</p>
-  <p class="note">Recording muxes the already-encoded stream — no re-encode; the
-     <em>source</em> is what's saved (the sub-stream is far lighter). Formatting
-     <em class="warn">erases everything</em> on the card.</p>
+      <!-- NETWORK ----------------------------------------------------------->
+      <section class="setsec" id="sec-network">
+        <div class="seccontent">
+          <h2>Network (wifi IP)</h2>
+          <div class="info" id="netinfo">Loading…</div>
+          <label>IP assignment
+            <select id="netmode">
+              <option value="dhcp">Automatic (DHCP)</option>
+              <option value="static">Static IP</option>
+            </select>
+          </label>
+          <div id="netstatic" hidden>
+            <label>IP address
+              <input type="text" id="netaddr" placeholder="10.0.2.50" inputmode="decimal" autocomplete="off" spellcheck="false">
+            </label>
+            <label>Subnet mask
+              <input type="text" id="netmask" placeholder="255.255.255.0" inputmode="decimal" autocomplete="off" spellcheck="false">
+            </label>
+            <label>Gateway
+              <input type="text" id="netgw" placeholder="10.0.2.1" inputmode="decimal" autocomplete="off" spellcheck="false">
+            </label>
+            <label>DNS server 1
+              <input type="text" id="netdns1" placeholder="8.8.8.8" inputmode="decimal" autocomplete="off" spellcheck="false">
+            </label>
+            <label>DNS server 2 (optional)
+              <input type="text" id="netdns2" placeholder="1.1.1.1" inputmode="decimal" autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+          <p class="note" id="netmsg"></p>
+          <p class="note"><em class="warn">Applying a network change disconnects this page.</em>
+             On a static IP, reconnect at the new address. If the address, mask or gateway is wrong the
+             camera can become <em>unreachable</em> — you'd have to reconnect it to wifi to recover, so
+             double-check before applying.</p>
+        </div>
+        <div class="setfoot"><div class="setfootinner">
+          <span class="sp"></span>
+          <button class="act go" id="netsave">Apply network settings</button>
+        </div></div>
+      </section>
+
+      <!-- DEVICE & SYSTEM --------------------------------------------------->
+      <section class="setsec" id="sec-device">
+        <div class="seccontent">
+          <h2>System information</h2>
+          <div class="info" id="devinfo">Loading…</div>
+          <hr class="rule">
+          <h2>Firmware update</h2>
+          <input type="file" id="otafile" accept=".bin,.squashfs,application/octet-stream">
+          <div class="info" id="otainfo">Choose a <b>rootfs.squashfs</b> (recommended) or a full <b>.bin</b>.</div>
+          <label class="chk" id="otafullwrap" hidden>
+            <input type="checkbox" id="otafull">
+            Full image — rewrites the bootloader. Can brick the camera.
+          </label>
+          <p class="note" id="otanote">The image is checksummed in your browser and re-checked on the
+             camera before anything is written. A rootfs update keeps your wifi and password; the
+             camera reboots on its own. <em class="warn">Do not cut power during the update.</em></p>
+        </div>
+        <div class="setfoot"><div class="setfootinner">
+          <button class="act danger" id="devreboot">Reboot…</button>
+          <span class="sp"></span>
+          <button class="act go" id="otalogin" hidden>Open login page →</button>
+          <button class="act go" id="otago" disabled>Update firmware</button>
+        </div></div>
+      </section>
+
+      <!-- ACCOUNT ----------------------------------------------------------->
+      <section class="setsec" id="sec-account">
+        <div class="seccontent">
+          <h2>Device name</h2>
+          <label>Name
+            <input type="text" id="devname" maxlength="32" placeholder="e.g. cam-front" autocomplete="off" spellcheck="false">
+          </label>
+          <p class="note">The camera's hostname, the centre video overlay, and the name ONVIF /
+             network discovery shows. Letters, digits and hyphens only (no spaces).</p>
+          <hr class="rule">
+          <h2>Web login password</h2>
+          <div class="info">Username <b>root</b></div>
+          <label>Current password
+            <input type="password" id="pwcur" autocomplete="current-password">
+          </label>
+          <label>New password
+            <input type="password" id="pwnew" autocomplete="new-password">
+          </label>
+          <label>Confirm new password
+            <input type="password" id="pwnew2" autocomplete="new-password">
+          </label>
+          <p class="note">6–64 characters. This is the password for this web interface and SSH.
+             Leave blank to keep it unchanged.</p>
+          <hr class="rule">
+          <h2>ONVIF / RTSP credentials</h2>
+          <label>Username
+            <input type="text" id="onvuser" maxlength="32" autocomplete="off" spellcheck="false">
+          </label>
+          <label>Password
+            <input type="password" id="onvpass" maxlength="32" autocomplete="new-password" placeholder="unchanged">
+          </label>
+          <p class="note">Used by ONVIF / RTSP clients (NVRs, viewers). Separate from the web login.
+             1–32 characters, no spaces.</p>
+          <p class="note" id="accmsg"></p>
+        </div>
+        <div class="setfoot"><div class="setfootinner">
+          <span class="sp"></span>
+          <button class="act go" id="accsave">Save changes</button>
+        </div></div>
+      </section>
+
+      <!-- OVERLAYS (visual editor) ------------------------------------------>
+      <section class="setsec" id="sec-overlays">
+        <div class="seccontent">
+          <h2>Video overlays</h2>
+          <label class="chk"><input type="checkbox" id="osdenable"> Show overlays on the video</label>
+          <div id="osdframe" class="osdframe"><div class="osdhint">Loading…</div></div>
+          <div id="osdeditor" class="osdeditor" hidden>
+            <div class="osdedhd"><span id="osdedname">Element</span>
+              <label class="chk"><input type="checkbox" id="osded_vis"> Visible</label></div>
+            <div class="osdgrid2">
+              <label>Position
+                <select id="osded_pos">
+                  <option value="top_left">top left</option>
+                  <option value="top_center">top center</option>
+                  <option value="top_right">top right</option>
+                  <option value="bottom_left">bottom left</option>
+                  <option value="bottom_center">bottom center</option>
+                  <option value="bottom_right">bottom right</option>
+                  <option value="center">center</option>
+                </select>
+              </label>
+              <label id="osded_fswrap">Font size
+                <select id="osded_fs">
+                  <option>16</option><option>20</option><option>24</option>
+                  <option>28</option><option>32</option><option>40</option><option>48</option>
+                </select>
+              </label>
+              <label id="osded_colwrap">Colour<input type="color" id="osded_col"></label>
+              <label id="osded_tfwrap" hidden>Clock format
+                <select id="osded_tf">
+                  <option value="%Y-%m-%d %H:%M:%S">2026-08-20 14:30:00</option>
+                  <option value="%H:%M:%S">14:30:00</option>
+                  <option value="%d/%m/%Y %H:%M">20/08/2026 14:30</option>
+                  <option value="%b %d %H:%M">Aug 20 14:30</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="info" id="osdmsg"></div>
+          <p class="note">Click an overlay in the preview to edit its position, size and colour.
+             The centre text follows the <b>Device name</b> (Device tab). Changes apply to the live
+             video for every viewer when you press Apply.</p>
+        </div>
+        <div class="setfoot"><div class="setfootinner">
+          <span class="sp"></span>
+          <button class="act go" id="osdapply">Apply overlays</button>
+        </div></div>
+      </section>
+
+      <!-- RECORDING (recording only) ---------------------------------------->
+      <section class="setsec" id="sec-recording">
+        <div class="seccontent">
+          <h2>Recording</h2>
+          <div class="info" id="recnocard" hidden></div>
+          <div id="recfields">
+            <label class="chk"><input type="checkbox" id="recon"> Record to the SD card</label>
+            <label>Trigger
+              <select id="recmode">
+                <option value="motion">Motion only</option>
+                <option value="continuous">Continuous</option>
+                <option value="both">Continuous + motion</option>
+              </select>
+            </label>
+            <label>Source
+              <select id="recstream">
+                <option value="1">360p sub-stream (light)</option>
+                <option value="0">1080p main stream</option>
+              </select>
+            </label>
+            <label class="chk"><input type="checkbox" id="recaudio"> Record audio</label>
+            <label>Max clip length
+              <select id="recclip">
+                <option value="10">10 seconds</option>
+                <option value="15">15 seconds</option>
+                <option value="30">30 seconds</option>
+                <option value="60">1 minute</option>
+                <option value="120">2 minutes</option>
+                <option value="300">5 minutes</option>
+              </select>
+            </label>
+            <label>Storage limit
+              <select id="recmax">
+                <option value="1024">1 GB</option>
+                <option value="2048">2 GB</option>
+                <option value="4096">4 GB</option>
+                <option value="8192">8 GB</option>
+                <option value="0">No limit</option>
+              </select>
+            </label>
+          </div>
+          <p class="note">Recording muxes the already-encoded stream — no re-encode; the
+             <em>source</em> is what's saved (the sub-stream is far lighter). Motion trigger
+             settings are on the <b>Motion</b> tab; browse and format the card from the
+             <b>🎞 Recordings</b> button on the main screen.</p>
+          <p class="note" id="recmsg"></p>
+        </div>
+        <div class="setfoot"><div class="setfootinner">
+          <span class="sp"></span>
+          <button class="act go" id="recsave">Apply recording settings</button>
+        </div></div>
+      </section>
+
+      <!-- MOTION ------------------------------------------------------------>
+      <section class="setsec" id="sec-motion">
+        <div class="seccontent">
+          <h2>Motion detection</h2>
+          <label id="recsenswrap">Sensitivity
+            <select id="recsens">
+              <option value="0">Lowest</option>
+              <option value="1">Low</option>
+              <option value="2">Medium</option>
+              <option value="3">High</option>
+              <option value="4">Highest</option>
+            </select>
+          </label>
+          <label id="recpostwrap">Keep recording after motion
+            <select id="recpost">
+              <option value="0">Stop immediately</option>
+              <option value="2">2 seconds</option>
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="15">15 seconds</option>
+              <option value="30">30 seconds</option>
+            </select>
+          </label>
+          <label id="recprewrap">Pre-motion buffer
+            <select id="recpre">
+              <option value="0">Off</option>
+              <option value="1">1 second</option>
+              <option value="2">2 seconds</option>
+              <option value="3">3 seconds</option>
+              <option value="5">5 seconds</option>
+            </select>
+          </label>
+          <hr class="rule">
+          <h2>Motion zones</h2>
+          <div id="mzframe" class="mzframe">
+            <img id="mzsnap" alt="camera preview">
+            <div id="mzgrid" class="mzgrid"></div>
+            <div id="mzhint2" class="mzhint2">Loading preview…</div>
+          </div>
+          <div class="mzbar">
+            <button class="act" id="mzrefresh">Refresh preview</button>
+            <button class="act" id="mzall">Enable all zones</button>
+          </div>
+          <p class="note">Click a cell to <em>ignore</em> motion there (red = ignored). Green flashes
+             show where motion is being detected right now. Changes save immediately.</p>
+          <p class="note" id="recmotionnote">A motion clip length is the <em>pre-motion buffer</em> +
+             the detected movement + the <em>keep recording after motion</em> tail. The detector often
+             keeps seeing motion for a few seconds after you stop (auto-exposure settling), so the clip
+             runs a little past your movement. Raise <em>sensitivity</em> if motion is missed. These
+             settings only affect motion-triggered recording (Recording tab, trigger Motion or both).</p>
+        </div>
+        <div class="setfoot"><div class="setfootinner">
+          <span class="sp"></span>
+          <button class="act go" id="recmotionsave">Apply motion settings</button>
+        </div></div>
+      </section>
+
+    </div>
+  </div>
 </div>
 
 <div id="recmodal" hidden>
   <div class="recbar">
     <b>Recordings</b>
-    <select id="recdate"></select>
+    <span id="recpath" class="recpath"></span>
     <span class="sp"></span>
-    <label id="recselallwrap" hidden><input type="checkbox" id="recselall"> All</label>
-    <button id="recdelsel" hidden>Delete selected</button>
+    <span id="recstatus" class="recstatus"></span>
     <button id="recclose">Close</button>
   </div>
   <div class="recbody">
+    <div class="reccol">
+      <div class="reclisthead">
+        <input type="checkbox" id="recselall" title="Select all">
+        <span class="nm">Name</span>
+        <span class="sp"></span>
+        <span class="sz">Size</span>
+      </div>
+      <div id="reclist"></div>
+      <div class="recactions">
+        <button id="recnewdir" title="Create a folder here">New folder</button>
+        <button id="reccut" hidden title="Move the selected items">Cut</button>
+        <button id="recpaste" hidden title="Move the cut items into this folder">Paste here</button>
+        <button id="recdelsel" hidden>Delete selected</button>
+        <span class="sp"></span>
+        <button id="recformat" class="danger" title="Erase the SD card">Format card…</button>
+      </div>
+    </div>
     <video id="recvid" controls playsinline preload="metadata"></video>
-    <div id="reclist"></div>
   </div>
 </div>
 
@@ -452,7 +724,7 @@ function typingTarget(el){
 window.addEventListener('keydown',e=>{
   const d=ARROW_DIR[e.key];
   if(!d || e.altKey||e.ctrlKey||e.metaKey) return;
-  if(typingTarget(e.target) || !recModal.hidden) return;
+  if(typingTarget(e.target) || !recModal.hidden || !setModal.hidden) return;
   e.preventDefault();
   press(d[0],d[1]);
 });
@@ -537,57 +809,30 @@ async function loadPresets(){
   if(j&&j.presets)renderPresets(j.presets);
 }
 
-/* ---------- Motion zones --------------------------------------------------
-   Three states per cell: idle, hit (motion this frame), off (masked out).
-   A masked cell still reports hits — rvd keeps it in the bitmap so we can show
-   "seen but ignored" — it just no longer raises motion or triggers recording.
-
-   Button cycles: hidden -> shown -> editable -> hidden. */
-const gridEl=$('grid'), zonesBtn=$('zones');
-let gridMode=0;               // 0 hidden, 1 show, 2 edit
+/* ---------- Motion zones (snapshot editor in the Motion settings tab) ------
+   A still snapshot with a clickable grid over it. Each cell: idle, hit (motion
+   this frame, green), off (masked out, red). rvd keeps a masked cell in the hit
+   bitmap so "seen but ignored" still shows. Clicking toggles the mask and saves
+   immediately. We only poll while the Motion tab is actually visible. */
+const mzGrid=$('mzgrid'), mzSnap=$('mzsnap');
 let gx=0, gy=0, zoneMask=0, cells=[];
-
-function layoutGrid(){
-  // Match the video's letterboxed rect rather than the element box, or the
-  // zones drift away from the picture on non-16:9 windows.
-  // Never touch style.display here: an inline value would beat the .show class
-  // and pin the grid hidden.
-  if(!gx||!gy)return;
-  const vw=v.videoWidth, vh=v.videoHeight, r=v.getBoundingClientRect();
-  let left=r.left, top=r.top, w=r.width, h=r.height;
-  if(vw&&vh){                       // letterbox correction once metadata exists
-    const scale=Math.min(r.width/vw, r.height/vh);
-    w=vw*scale; h=vh*scale;
-    left=r.left+(r.width-w)/2; top=r.top+(r.height-h)/2;
-  }
-  Object.assign(gridEl.style,{left:left+'px',top:top+'px',width:w+'px',height:h+'px'});
-}
-function buildGrid(){
-  gridEl.textContent=''; cells=[];
-  // Set the track template here too — layoutGrid can bail before metadata,
-  // and without a template every cell would collapse into one column.
-  gridEl.style.gridTemplateColumns=`repeat(${gx},1fr)`;
-  gridEl.style.gridTemplateRows=`repeat(${gy},1fr)`;
-  for(let i=0;i<gx*gy;i++){
-    const c=document.createElement('div');
-    c.className='z';
-    c.onclick=()=>{ if(gridMode!==2)return;
-      zoneMask=(zoneMask||((1<<(gx*gy))-1))^(1<<i);   // 0 means "all on"; expand before toggling
-      applyMask();
-    };
-    cells.push(c); gridEl.append(c);
-  }
-  layoutGrid();
-}
-async function applyMask(){
-  const j=await motionApi('a=mask&v='+(zoneMask>>>0));
-  if(j)paintZones(j);
-}
+function mzActive(){ return !setModal.hidden && $('sec-motion').classList.contains('active'); }
 async function motionApi(qs){
   const r=await fetch('/x/motion.cgi?'+qs,{cache:'no-store'});
   if(r.status===401||r.status===403){location.replace('/login.html');return null;}
   return r.json().catch(()=>null);
 }
+function buildGrid(){
+  mzGrid.textContent=''; cells=[];
+  mzGrid.style.gridTemplateColumns=`repeat(${gx},1fr)`;
+  mzGrid.style.gridTemplateRows=`repeat(${gy},1fr)`;
+  for(let i=0;i<gx*gy;i++){
+    const c=document.createElement('div'); c.className='z';
+    c.onclick=()=>{ zoneMask=(zoneMask||((1<<(gx*gy))-1))^(1<<i); applyMask(); };   // 0 = all on
+    cells.push(c); mzGrid.append(c);
+  }
+}
+async function applyMask(){ const j=await motionApi('a=mask&v='+(zoneMask>>>0)); if(j)paintZones(j); }
 function paintZones(s){
   if(!s||!s.zones)return;
   if(s.grid_x!==gx||s.grid_y!==gy){gx=s.grid_x;gy=s.grid_y;buildGrid();}
@@ -597,26 +842,17 @@ function paintZones(s){
     c.classList.toggle('hit', !!(hits&(1<<i)));
     c.classList.toggle('off', !(enabled&(1<<i)));
   });
-  dot.classList.toggle('bad',false);
 }
-zonesBtn.onclick=()=>{
-  gridMode=(gridMode+1)%3;
-  gridEl.classList.toggle('show',gridMode>0);
-  gridEl.classList.toggle('edit',gridMode===2);
-  zonesBtn.textContent=['Zones','Zones ●','Zones ✎'][gridMode];
-  zonesBtn.title=['Show motion zones',
-                  'Zones shown — click again to edit the mask',
-                  'Click a zone to ignore it; click again to hide'][gridMode];
-  // Video metadata may not have arrived yet on a fresh connect; re-measure
-  // shortly after so the grid snaps onto the picture rather than the element box.
-  if(gridMode>0){layoutGrid();pollMotion();setTimeout(layoutGrid,600);}
-};
-async function pollMotion(){
-  if(gridMode===0)return;
-  paintZones(await motionApi('a=status'));
+function mzLoadSnapshot(){
+  const hint=$('mzhint2'); hint.textContent='Loading preview…'; hint.style.display='';
+  mzSnap.onload=()=>{ hint.style.display='none'; };
+  mzSnap.onerror=()=>{ hint.textContent='Preview unavailable'; hint.style.display=''; };
+  mzSnap.src='/x/ch0.jpg?ts='+Date.now();
 }
-addEventListener('resize',layoutGrid);
-v.addEventListener('loadedmetadata',layoutGrid);
+function loadMotionZones(){ mzLoadSnapshot(); pollMotion(); }
+$('mzrefresh').onclick=mzLoadSnapshot;
+$('mzall').onclick=()=>{ zoneMask=0; applyMask(); };
+async function pollMotion(){ if(!mzActive())return; paintZones(await motionApi('a=status')); }
 
 /* ---------- Video (WebRTC) ------------------------------------------------
    MJPEG was tried first and tops out near 3 fps on this SoC regardless of the
@@ -629,39 +865,60 @@ function setState(t,cls){ state.textContent=t; dot.className='dot'+(cls?' '+cls:
    Switching requires a fresh PeerConnection, so just reconnect.
    Frame rate and bitrate are ENCODER settings — they apply to every consumer
    (RTSP, ONVIF, recordings) and are persisted to raptor.conf. */
-const QKEY='cam.stream', quality=$('quality'), panel=$('videopanel');
+const QKEY='cam.stream', quality=$('quality');
 const fpsSel=$('fps'), brSel=$('bitrate');
 quality.value=localStorage.getItem(QKEY)||'0';
 quality.onchange=()=>{ localStorage.setItem(QKEY,quality.value); loadVideoSettings(); connect(); };
 
-const sysPanel=$('syspanel'), sdPanel=$('sdpanel');
+/* Video settings live in a small popover under the top bar — a live-viewing
+   concern you tweak while watching, kept off the full Settings screen. */
+const videoPanel=$('videopanel');
 $('videobtn').onclick=e=>{
   e.stopPropagation();
-  sysPanel.hidden=true; sdPanel.hidden=true;
-  panel.hidden=!panel.hidden;
-  if(!panel.hidden)loadVideoSettings();
-  reveal();
-};
-$('sysbtn').onclick=e=>{
-  e.stopPropagation();
-  panel.hidden=true; sdPanel.hidden=true;
-  sysPanel.hidden=!sysPanel.hidden;
-  reveal();
-};
-$('sdbtn').onclick=e=>{
-  e.stopPropagation();
-  panel.hidden=true; sysPanel.hidden=true;
-  sdPanel.hidden=!sdPanel.hidden;
-  if(!sdPanel.hidden)loadSdStatus();
+  videoPanel.hidden=!videoPanel.hidden;
+  if(!videoPanel.hidden)loadVideoSettings();
   reveal();
 };
 document.addEventListener('click',e=>{
-  if(!panel.hidden && !panel.contains(e.target))panel.hidden=true;
-  // Don't fold the system panel mid-update, or the file choice and progress
-  // vanish on the first stray click.
-  if(!sysPanel.hidden && !sysPanel.contains(e.target) && !otaBusy)sysPanel.hidden=true;
-  // Same idea while a format is in flight.
-  if(!sdPanel.hidden && !sdPanel.contains(e.target) && !sdBusy)sdPanel.hidden=true;
+  if(!videoPanel.hidden && !videoPanel.contains(e.target) && e.target.id!=='videobtn')
+    videoPanel.hidden=true;
+});
+
+/* ---------- Settings screen (full-screen, left-nav sections) ------------
+   One modal holds every configuration section. Each section lazily loads its
+   state the first time it's shown (and again whenever settings reopens on it),
+   so opening Settings costs one small request, not all of them. */
+const setModal=$('setmodal');
+// section key -> loader run when the section becomes visible
+const SECTION_LOAD={
+  device:   ()=>loadDevice(),
+  account:  ()=>loadAccount(),
+  overlays: ()=>loadOsd(),
+  recording:()=>loadSdStatus(),
+  motion:   ()=>{ loadSdStatus(); loadMotionZones(); },
+  network:  ()=>loadNet(),
+};
+function showSection(key){
+  document.querySelectorAll('.setnavbtn').forEach(b=>b.classList.toggle('active',b.dataset.sec===key));
+  document.querySelectorAll('.setsec').forEach(s=>s.classList.toggle('active',s.id==='sec-'+key));
+  const load=SECTION_LOAD[key]; if(load)load();
+}
+document.querySelectorAll('.setnavbtn').forEach(b=>{
+  b.onclick=()=>showSection(b.dataset.sec);
+});
+function openSettings(key){
+  setModal.hidden=false;
+  showSection(key||'account');
+}
+function closeSettings(){
+  // Don't yank the modal away mid-flash or mid-format.
+  if(otaBusy||sdBusy)return;
+  setModal.hidden=true;
+}
+$('setbtn').onclick=()=>openSettings('account');
+$('setclose').onclick=closeSettings;
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&!setModal.hidden)closeSettings();
 });
 
 function nearestOption(sel,val){
@@ -785,7 +1042,8 @@ const REVEAL_TOP=96, REVEAL_BOT=210;
 let lastPointerY=0, chromeTouchTimer=null;
 function reveal(){
   const H=window.innerHeight;
-  const keepTop = lastPointerY<REVEAL_TOP || !panel.hidden || !sysPanel.hidden || !sdPanel.hidden;
+  // Settings is a full-screen modal, so it no longer needs to pin the bar.
+  const keepTop = lastPointerY<REVEAL_TOP;
   const keepBot = lastPointerY>H-REVEAL_BOT || !!held;
   document.body.classList.toggle('show-top', keepTop);
   document.body.classList.toggle('show-bot', keepBot);
@@ -814,7 +1072,11 @@ setTimeout(reveal, 2600);
    config); u-boot 06 05 04 03 = full image (rewrites the bootloader). */
 let otaBusy=false, otaBuf=null, otaSha='', otaType='';
 const otaFile=$('otafile'), otaInfo=$('otainfo'), otaGo=$('otago'),
-      otaFullWrap=$('otafullwrap'), otaFull=$('otafull'), otaNote=$('otanote');
+      otaFullWrap=$('otafullwrap'), otaFull=$('otafull'), otaNote=$('otanote'),
+      otaLogin=$('otalogin');
+// A real navigation (not a background fetch) is the only thing that can show
+// the cert-accept prompt after a full flash regenerates the self-signed cert.
+otaLogin.onclick=()=>location.assign('/login.html');
 
 const hex=buf=>[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
 function fmtBytes(n){ return n>=1073741824 ? (n/1073741824).toFixed(1)+' GB'
@@ -824,6 +1086,7 @@ function fmtBytes(n){ return n>=1073741824 ? (n/1073741824).toFixed(1)+' GB'
 function otaReset(keepPanel){
   otaBuf=null; otaSha=''; otaType='';
   otaGo.disabled=true; otaFullWrap.hidden=true; otaFull.checked=false;
+  otaLogin.hidden=true;
   if(!keepPanel){ otaFile.value=''; }
 }
 
@@ -857,21 +1120,51 @@ otaFile.onchange=async()=>{
 // The full-image guard: the button only enables once the danger box is ticked.
 otaFull.onchange=()=>{ if(otaType==='full')otaGo.disabled=!otaFull.checked; };
 
-// Poll the login page until the camera answers again, then hand off to it.
-async function waitForReboot(){
-  let seenDown=false;
-  for(let i=0;i<150;i++){                 // ~5 min ceiling at 2 s
+// Wait for the camera to reboot, then hand off to the login page.
+//
+// A background fetch can only confirm the camera is back when the TLS cert is
+// unchanged — i.e. a rootfs OTA. A FULL image wipes wifi AND regenerates the
+// self-signed cert, so every https fetch to the new cert throws (the browser
+// won't click through a cert warning for a background request) and r.ok is
+// never seen. Only a real navigation shows the cert-accept prompt. So we:
+//  • always surface the manual "Open login page →" button as an escape hatch,
+//  • take the fast auto-handoff when a fetch does succeed (rootfs case),
+//  • for a full flash, steer the user to the manual step instead of silently
+//    polling to a dead 5-minute timeout.
+async function waitForReboot(isFull){
+  otaLogin.hidden=false;                       // escape hatch, always available
+  let seenDown=false, downTicks=0;
+  for(let i=0;i<150;i++){                       // ~5 min ceiling at 2 s
     await new Promise(r=>setTimeout(r,2000));
+    let up=false;
     try{
-      const r=await fetch('/login.html',{cache:'no-store'});
-      if(r.ok){
-        if(seenDown){ location.replace('/login.html'); return; }
-        // Still the pre-reboot server; wait until it actually drops first.
-      }
-    }catch(_){ seenDown=true; }           // connection refused == rebooting
-    otaNote.textContent='Flashing… the camera is rebooting'+(seenDown?' — reconnecting':'')+' ('+((i+1)*2)+'s)';
+      // Bound each probe so a hung connection can't stall the 2 s cadence.
+      const ac=new AbortController(), t=setTimeout(()=>ac.abort(),1800);
+      const r=await fetch('/login.html',{cache:'no-store',signal:ac.signal});
+      clearTimeout(t); up=r.ok;
+    }catch(_){ }                               // refused / cert-rejected / aborted
+    if(up){
+      if(seenDown){ location.replace('/login.html'); return; }
+      // else still the pre-reboot server; wait until it actually drops first.
+    }else{
+      seenDown=true; downTicks++;
+    }
+    const secs=(i+1)*2;
+    if(isFull && seenDown && downTicks>=3){
+      otaNote.innerHTML='A full image resets wifi and regenerates the camera’s '
+        +'security certificate, so this page can’t detect it coming back. '
+        +'Reconnect the camera to wifi if needed, then click <b>Open login page →</b> '
+        +'and accept the new certificate. ('+secs+'s)';
+    }else{
+      otaNote.textContent='Flashing… the camera is rebooting'
+        +(seenDown?' — waiting for it to return':'')+' ('+secs+'s)';
+    }
   }
-  otaNote.innerHTML='<span class="warn">Camera has not come back after 5 minutes. Check it and reload.</span>';
+  otaNote.innerHTML=isFull
+    ? 'No automatic response — expected after a full flash (new certificate). '
+      +'Once the camera is back on wifi, click <b>Open login page →</b> and accept the certificate.'
+    : '<span class="warn">Camera has not come back after 5 minutes.</span> '
+      +'Click <b>Open login page →</b> or reload.';
 }
 
 otaGo.onclick=async()=>{
@@ -899,12 +1192,12 @@ otaGo.onclick=async()=>{
     }
     otaInfo.textContent='Accepted — do not cut power.';
     otaNote.textContent='Flashing… the camera is rebooting';
-    waitForReboot();
+    waitForReboot(otaType==='full');
   }catch(err){
     // A dropped connection here can mean the flash started and took the link
     // down — so move to the reboot wait rather than calling it a failure.
     otaInfo.textContent='Upload ended; watching for reboot…';
-    waitForReboot();
+    waitForReboot(otaType==='full');
   }
 };
 
@@ -915,7 +1208,7 @@ otaGo.onclick=async()=>{
    gates them. */
 let sdBusy=false;
 const recon=$('recon'), recmode=$('recmode'), recstream=$('recstream'),
-      recaudio=$('recaudio'), recclip=$('recclip'), recmax=$('recmax'), sdInfo=$('sdinfo'),
+      recaudio=$('recaudio'), recclip=$('recclip'), recmax=$('recmax'), recMsg=$('recmsg'),
       recsens=$('recsens'), recpost=$('recpost'), recpre=$('recpre');
 
 // Sensitivity / post-motion / pre-buffer only matter when motion is a trigger.
@@ -934,19 +1227,18 @@ async function sdApi(qs,opts){
 function selNear(sel,val){ for(const o of sel.options) if(o.value==val){sel.value=o.value;return;} }
 
 async function loadSdStatus(){
-  sdInfo.textContent='Checking card…';
   const j=await sdApi('');
-  if(!j||!j.ok){ sdInfo.innerHTML='<span class="off">Status unavailable.</span>'; return; }
-  const c=j.card||{}, cfg=j.cfg||{};
-  if(!c.present)       sdInfo.innerHTML='<span class="off">No SD card detected.</span>';
-  else if(!c.mounted) sdInfo.innerHTML='<span class="off">Card present but not mounted.</span>';
-  else{
-    const used=fmtBytes((c.used_kb||0)*1024), tot=fmtBytes((c.size_kb||0)*1024);
-    const on=cfg.enabled===true;
-    sdInfo.innerHTML=(c.fstype||'?')+' · <b>'+used+'</b> of '+tot+' used · recording '
-      +(on?'<b class="on">on</b>':'<span class="off">off</span>');
-  }
-  const m=j.motion||{};
+  const cfg=(j&&j.cfg)||{}, c=(j&&j.card)||{}, m=(j&&j.motion)||{};
+  const haveCard = c.present===true && c.mounted===true;
+  // Recording needs a usable card: disable its controls + explain when absent.
+  const noCardEl=$('recnocard'), fieldsEl=$('recfields');
+  noCardEl.hidden = haveCard;
+  if(!haveCard) noCardEl.innerHTML='<span class="off">No SD card — insert one to enable recording '
+    +'(browse and format the card from the <b>🎞 Recordings</b> button on the main screen).</span>';
+  fieldsEl.style.opacity = haveCard?'':'.5';
+  fieldsEl.querySelectorAll('input,select').forEach(el=>{ el.disabled=!haveCard; });
+  $('recsave').disabled = !haveCard;
+
   recon.checked = cfg.enabled===true;
   if(cfg.mode) selNear(recmode,cfg.mode);
   if(cfg.stream!=null) selNear(recstream,cfg.stream);
@@ -959,34 +1251,48 @@ async function loadSdStatus(){
   paintRecMode();
 }
 
-$('recsave').onclick=async()=>{
+// sd.cgi accepts partial updates and preserves the running on/off state when
+// `enabled` is omitted, so Recording and Motion each save just their own keys.
+async function sdApplyConfig(btn,body,onDone){
   if(sdBusy)return;
-  sdBusy=true; const btn=$('recsave'), was=btn.textContent;
+  sdBusy=true; const was=btn.textContent;
   btn.disabled=true; btn.textContent='Applying…';
+  const j=await sdApi('a=config',{method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  sdBusy=false; btn.disabled=false; btn.textContent=was;
+  if(!j||!j.ok){ recMsg.className='note bad'; recMsg.textContent='Apply failed'+(j&&j.error?': '+j.error:''); return; }
+  recMsg.textContent='';
+  if(onDone)onDone();
+}
+$('recsave').onclick=()=>{
   const body='enabled='+(recon.checked?1:0)
     +'&mode='+encodeURIComponent(recmode.value)
     +'&stream='+recstream.value
     +'&audio='+(recaudio.checked?1:0)
-    +'&sensitivity='+recsens.value
-    +'&record_post_sec='+recpost.value
-    +'&prebuffer_sec='+recpre.value
     +'&clip_length_sec='+recclip.value
     +'&max_storage_mb='+recmax.value;
-  const j=await sdApi('a=config',{method:'POST',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
-  sdBusy=false; btn.disabled=false; btn.textContent=was;
-  if(!j||!j.ok){ sdInfo.innerHTML='<span class="off">Apply failed'+(j&&j.error?': '+j.error:'')+'</span>'; return; }
-  loadSdStatus(); pollRec();
+  sdApplyConfig($('recsave'),body,()=>{ loadSdStatus(); pollRec(); });
 };
+$('recmotionsave').onclick=()=>{
+  const body='sensitivity='+recsens.value
+    +'&record_post_sec='+recpost.value
+    +'&prebuffer_sec='+recpre.value;
+  sdApplyConfig($('recmotionsave'),body,()=>{ loadSdStatus(); });
+};
+// The zone editor works on the live video, so close Settings and hand off to
+// the existing Zones control (show zones; click it again on the video to edit).
 
 /* On-video REC indicator — cheap poll of sd.cgi?a=recstate. Hidden when
    recording is off; dim "READY" when armed/enabled; red pulsing "REC" while a
    clip is actually being written (a motion clip in progress, or continuous). */
 const recInd=$('recind'), recIndLbl=recInd.querySelector('.lbl');
+// Top-bar Recordings button opens the browser; it only shows when a card is in.
+$('recbtn').onclick=()=>openRecordings();
 async function pollRec(){
   let j=null;
   try{ const r=await fetch('/x/sd.cgi?a=recstate',{cache:'no-store'});
        if(r.ok) j=await r.json().catch(()=>null); }catch(_){}
+  $('recbtn').hidden = !(j && j.ok && j.card);
   if(!j||!j.ok||!j.on){ recInd.classList.remove('show','active'); return; }
   recInd.classList.add('show');
   recInd.classList.toggle('active', j.active===true);
@@ -994,119 +1300,405 @@ async function pollRec(){
   recInd.title = j.active ? 'Recording a clip to the SD card' : 'Recording armed — waiting for motion';
 }
 
-$('sdformat').onclick=async()=>{
+$('recformat').onclick=async()=>{
   if(sdBusy)return;
   if(!confirm('Format the SD card? This ERASES every recording on it and cannot be undone.'))return;
-  sdBusy=true; const btn=$('sdformat'), was=btn.textContent;
+  sdBusy=true; const btn=$('recformat'), was=btn.textContent;
   btn.disabled=true; btn.textContent='Formatting…';
   const j=await sdApi('a=format',{method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'confirm=ERASE'});
   sdBusy=false; btn.disabled=false; btn.textContent=was;
-  if(!j||!j.ok){ sdInfo.innerHTML='<span class="off">Format failed'+(j&&j.error?': '+j.error:'')+'</span>'; return; }
-  loadSdStatus();
+  if(!j||!j.ok){ alert('Format failed'+(j&&j.error?': '+j.error:'')); return; }
+  loadCardStatus(); browseTo('');   // refresh status + re-list the now-empty card
 };
 
 /* ---------- recordings browser (full-screen modal) ---------------------- */
-const recModal=$('recmodal'), recDate=$('recdate'), recList=$('reclist'), recVid=$('recvid');
-$('recbrowse').onclick=()=>{ sdPanel.hidden=true; openRecordings(); };
+const recModal=$('recmodal'), recList=$('reclist'), recVid=$('recvid'), recPath=$('recpath');
 $('recclose').onclick=closeRecordings;
+// Card status shown in the recordings toolbar (fstype + used/total).
+async function loadCardStatus(){
+  const el=$('recstatus'); if(!el)return;
+  el.textContent='';
+  const j=await sdApi('');
+  const c=(j&&j.card)||{};
+  if(c.present && c.mounted)
+    el.innerHTML=(c.fstype||'?')+' · '+fmtBytes((c.used_kb||0)*1024)+' / '+fmtBytes((c.size_kb||0)*1024);
+  else el.innerHTML='<span class="off">'+(c.present?'not mounted':'no card')+'</span>';
+}
 function closeRecordings(){ recVid.pause(); recVid.removeAttribute('src'); recVid.load(); recModal.hidden=true; }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&!recModal.hidden)closeRecordings(); });
 
-async function clipsApi(qs){
-  const r=await fetch('/x/clips.cgi?'+qs,{cache:'no-store'});
+async function clipsApi(qs,opts){
+  const r=await fetch('/x/clips.cgi?'+qs,Object.assign({cache:'no-store'},opts||{}));
   if(r.status===401||r.status===403){location.replace('/login.html');return null;}
   return r.json().catch(()=>null);
 }
-async function openRecordings(){
+function clipsPost(qs,body){
+  return clipsApi(qs,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body||''});
+}
+
+/* Folder-navigable recordings manager: browse, play/download, rename, mkdir,
+   cut/paste-move and delete — all confined server-side to the recordings tree. */
+let recCwd='', recClip=null;          // current folder (rel), cut clipboard (rels)
+function openRecordings(){ recClip=null; loadCardStatus(); browseTo(''); }
+async function browseTo(rel){
   recModal.hidden=false;
   recList.innerHTML='<div class="empty">Loading…</div>';
-  const j=await clipsApi('a=dates');
-  recDate.innerHTML='';
-  if(!j||!j.ok||!j.dates.length){ recList.innerHTML='<div class="empty">No recordings yet.</div>'; return; }
-  for(const d of j.dates){
-    const o=document.createElement('option');
-    o.value=d.date; o.textContent=d.date+' · '+(d.motion+d.segment)+' clips';
-    recDate.appendChild(o);
-  }
-  recDate.value=j.dates[j.dates.length-1].date;   // newest day first
-  loadDay();
+  const j=await clipsApi('a=browse&d='+encodeURIComponent(rel));
+  if(!j||!j.ok){ recList.innerHTML='<div class="empty">'+((j&&j.error)||'Folder unavailable')+'</div>'; return; }
+  recCwd=j.path||'';
+  renderPath();
+  renderList(j);
 }
-recDate.onchange=loadDay;
-async function loadDay(){
-  recList.innerHTML='<div class="empty">Loading…</div>';
-  const j=await clipsApi('a=list&date='+encodeURIComponent(recDate.value));
-  if(!j||!j.ok||!j.files.length){ recList.innerHTML='<div class="empty">No clips for this day.</div>'; updateSelCount(); return; }
+function renderPath(){
+  recPath.innerHTML='';
+  const mk=(label,rel)=>{ const a=document.createElement('span'); a.className='crumb';
+    a.textContent=label; a.onclick=()=>browseTo(rel); return a; };
+  recPath.appendChild(mk('Recordings',''));
+  let acc='';
+  if(recCwd) for(const seg of recCwd.split('/')){
+    acc = acc?acc+'/'+seg:seg;
+    recPath.appendChild(document.createTextNode(' / '));
+    recPath.appendChild(mk(seg,acc));
+  }
+}
+function renderList(j){
   recList.innerHTML='';
-  for(const f of j.files){
-    const url='/x/clips.cgi?a=get&f='+encodeURIComponent(f.f);
-    const row=document.createElement('div'); row.className='clip'; row.dataset.f=f.f;
+  const dirs=j.dirs||[], files=j.files||[];
+  if(!dirs.length && !files.length){ recList.innerHTML='<div class="empty">Empty folder.</div>'; updateSelCount(); return; }
+  for(const d of dirs){
+    const row=document.createElement('div'); row.className='dir'; row.dataset.rel=d.rel; row.dataset.kind='dir';
     row.innerHTML='<input type="checkbox" class="pick" title="Select">'
-      +'<span class="t">'+f.time+'</span>'
-      +'<span class="b'+(f.type==='motion'?' motion':'')+'">'+f.type+'</span>'
+      +'<span class="ic">📁</span><span class="t">'+d.name+'</span>'
+      +'<span class="sp"></span><span class="sz">'+d.count+' item'+(d.count===1?'':'s')+' · '+fmtBytes(d.bytes)+'</span>'
+      +'<span class="ren" title="Rename">✎</span><span class="del" title="Delete folder">✕</span>';
+    row.onclick=()=>browseTo(d.rel);
+    const pk=row.querySelector('.pick'); pk.onclick=e=>e.stopPropagation(); pk.onchange=updateSelCount;
+    row.querySelector('.ren').onclick=e=>{ e.stopPropagation(); renameItem(d.rel,d.name); };
+    row.querySelector('.del').onclick=e=>{ e.stopPropagation(); delFolder(d.rel,d.name); };
+    recList.appendChild(row);
+  }
+  for(const f of files){
+    const url='/x/clips.cgi?a=get&f='+encodeURIComponent(f.rel);
+    const row=document.createElement('div'); row.className='clip'; row.dataset.rel=f.rel; row.dataset.kind='file';
+    row.innerHTML='<input type="checkbox" class="pick" title="Select">'
+      +'<span class="ic">🎞</span><span class="t">'+f.name+'</span>'
       +'<span class="sp"></span><span class="sz">'+fmtBytes(f.bytes)+'</span>'
-      +'<a title="Download" href="'+url+'" download="'+recDate.value+'_'+f.time.replace(/:/g,'-')+'_'+f.type+'.mp4">⤓</a>'
-      +'<span class="del" title="Delete">✕</span>';
-    // The whole row plays; the checkbox, download link and delete opt out.
+      +'<a title="Download" href="'+url+'" download="'+f.name+'">⤓</a>'
+      +'<span class="ren" title="Rename">✎</span><span class="del" title="Delete">✕</span>';
     row.onclick=()=>playClip(url,row);
-    const pick=row.querySelector('.pick');
-    pick.onclick=e=>e.stopPropagation();
-    pick.onchange=updateSelCount;
+    const pk=row.querySelector('.pick'); pk.onclick=e=>e.stopPropagation(); pk.onchange=updateSelCount;
     row.querySelector('a').onclick=e=>e.stopPropagation();
-    row.querySelector('.del').onclick=e=>{ e.stopPropagation(); delClip(f,row); };
+    row.querySelector('.ren').onclick=e=>{ e.stopPropagation(); renameItem(f.rel,f.name); };
+    row.querySelector('.del').onclick=e=>{ e.stopPropagation(); delOne(f.rel,row); };
     recList.appendChild(row);
   }
   updateSelCount();
 }
-function selectedRows(){
-  return [...recList.querySelectorAll('.clip')].filter(r=>r.querySelector('.pick').checked);
-}
+function selectedRows(){ return [...recList.querySelectorAll('.pick')].filter(c=>c.checked).map(c=>c.closest('[data-rel]')); }
 function updateSelCount(){
   const boxes=recList.querySelectorAll('.pick'), n=selectedRows().length;
-  const del=$('recdelsel'), allWrap=$('recselallwrap'), all=$('recselall');
-  allWrap.hidden = boxes.length===0;
-  del.hidden = n===0;
-  del.textContent = 'Delete selected ('+n+')';
-  all.checked = boxes.length>0 && n===boxes.length;
+  $('recdelsel').hidden = n===0; $('recdelsel').textContent='Delete selected ('+n+')';
+  $('reccut').hidden = n===0;    $('reccut').textContent='Cut ('+n+')';
+  $('recpaste').hidden = !(recClip&&recClip.length);
+  if(recClip&&recClip.length) $('recpaste').textContent='Paste here ('+recClip.length+')';
+  $('recselall').checked = boxes.length>0 && n===boxes.length;
 }
-$('recselall').onchange=e=>{
-  recList.querySelectorAll('.pick').forEach(c=>{ c.checked=e.target.checked; });
-  updateSelCount();
+$('recselall').onchange=e=>{ recList.querySelectorAll('.pick').forEach(c=>{c.checked=e.target.checked;}); updateSelCount(); };
+$('recnewdir').onclick=async()=>{
+  const name=prompt('New folder name (letters, digits, . _ - only):'); if(!name)return;
+  const j=await clipsPost('a=mkdir&d='+encodeURIComponent(recCwd)+'&name='+encodeURIComponent(name));
+  if(j&&j.ok)browseTo(recCwd); else alert('Could not create folder'+(j&&j.error?': '+j.error:''));
 };
+$('reccut').onclick=()=>{ recClip=selectedRows().map(r=>r.dataset.rel); updateSelCount(); };
+$('recpaste').onclick=async()=>{
+  if(!recClip||!recClip.length)return;
+  const j=await clipsPost('a=move&to='+encodeURIComponent(recCwd),'files='+recClip.map(encodeURIComponent).join(','));
+  recClip=null;
+  if(j&&j.ok){ browseTo(recCwd); if(j.failed)alert(j.failed+' item(s) could not be moved (name clash?)'); }
+  else alert('Move failed'+(j&&j.error?': '+j.error:''));
+};
+async function renameItem(rel,cur){
+  const name=prompt('Rename to:',cur); if(!name||name===cur)return;
+  const j=await clipsPost('a=rename&f='+encodeURIComponent(rel)+'&name='+encodeURIComponent(name));
+  if(j&&j.ok)browseTo(recCwd); else alert('Rename failed'+(j&&j.error?': '+j.error:''));
+}
+async function delOne(rel,row){
+  if(!confirm('Delete this recording?'))return;
+  const j=await clipsPost('a=del&f='+encodeURIComponent(rel));
+  if(j&&j.ok){ row.remove(); updateSelCount(); } else alert('Delete failed'+(j&&j.error?': '+j.error:''));
+}
+async function delFolder(rel,name){
+  if(!confirm('Delete the folder "'+name+'" and everything in it?'))return;
+  const j=await clipsPost('a=deltree&d='+encodeURIComponent(rel));
+  if(j&&j.ok)browseTo(recCwd); else alert('Delete failed'+(j&&j.error?': '+j.error:''));
+}
 $('recdelsel').onclick=async()=>{
   const rows=selectedRows(); if(!rows.length)return;
-  if(!confirm('Delete '+rows.length+' selected recording'+(rows.length>1?'s':'')+'?'))return;
-  const files=rows.map(r=>r.dataset.f);
-  const body='files='+files.map(encodeURIComponent).join(',');
-  const r=await fetch('/x/clips.cgi?a=delbatch',{method:'POST',cache:'no-store',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
-  if(r.status===401||r.status===403){location.replace('/login.html');return;}
-  const j=await r.json().catch(()=>null);
-  if(j&&j.ok){
-    rows.forEach(x=>x.remove());
-    updateSelCount();
-    if(!recList.children.length)recList.innerHTML='<div class="empty">No clips for this day.</div>';
-    if(j.failed)alert(j.failed+' recording'+(j.failed>1?'s':'')+' could not be deleted');
-  } else alert('Delete failed'+(j&&j.error?': '+j.error:''));
+  const files=rows.filter(r=>r.dataset.kind==='file').map(r=>r.dataset.rel);
+  const dirs=rows.filter(r=>r.dataset.kind==='dir').map(r=>r.dataset.rel);
+  if(!confirm('Delete '+rows.length+' selected item'+(rows.length>1?'s':'')
+     +(dirs.length?' (folders delete their contents too)':'')+'?'))return;
+  let failed=0;
+  if(files.length){ const j=await clipsPost('a=delbatch','files='+files.map(encodeURIComponent).join(',')); if(j&&j.ok)failed+=j.failed||0; else failed+=files.length; }
+  for(const d of dirs){ const j=await clipsPost('a=deltree&d='+encodeURIComponent(d)); if(!(j&&j.ok))failed++; }
+  browseTo(recCwd);
+  if(failed)alert(failed+' item(s) could not be deleted');
 };
 function playClip(url,row){
-  recList.querySelectorAll('.clip.sel').forEach(x=>x.classList.remove('sel'));
+  recList.querySelectorAll('.sel').forEach(x=>x.classList.remove('sel'));
   row.classList.add('sel');
   recVid.src=url; recVid.play().catch(()=>{});
 }
-async function delClip(f,row){
-  if(!confirm('Delete the clip at '+f.time+'?'))return;
-  const r=await fetch('/x/clips.cgi?a=del&f='+encodeURIComponent(f.f),{method:'POST',cache:'no-store'});
-  if(r.status===401||r.status===403){location.replace('/login.html');return;}
-  const j=await r.json().catch(()=>null);
-  if(j&&j.ok){ row.remove(); if(!recList.children.length)recList.innerHTML='<div class="empty">No clips for this day.</div>'; }
-  else alert('Delete failed'+(j&&j.error?': '+j.error:''));
+
+/* ---------- Settings: Device / Account / Overlays wiring ----------------
+   Small fetch helpers shared by the new sections. Passwords go base64-encoded
+   (like login.html) so any byte survives the urlencoded transport; the browser
+   never receives a stored password back. */
+async function apiGet(url){
+  const r=await fetch(url,{cache:'no-store'});
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
 }
+async function apiPost(url,body){
+  const r=await fetch(url,{method:'POST',cache:'no-store',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
+}
+const b64=s=>btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+
+/* -- Device -- */
+function fmtUptime(sec){
+  sec=+sec||0; const d=Math.floor(sec/86400), h=Math.floor(sec%86400/3600), m=Math.floor(sec%3600/60);
+  if(d)return d+'d '+h+'h'; if(h)return h+'h '+m+'m'; return m+'m';
+}
+function setCamName(name){
+  $('camname').textContent=name||'Camera';
+  $('setname').textContent=name?('· '+name):'';
+}
+async function loadDevice(){
+  const j=await apiGet('/x/device.cgi');
+  if(!j||!j.ok){ $('devinfo').innerHTML='<span class="off">Unavailable.</span>'; return; }
+  setCamName(j.name);   // device name field itself lives on the Account tab now
+  const memUsed=(j.mem_total_kb||0)-(j.mem_avail_kb||0);
+  const mem=j.mem_total_kb?(' · RAM <b>'+fmtBytes(memUsed*1024)+'</b> / '+fmtBytes(j.mem_total_kb*1024)):'';
+  $('devinfo').innerHTML='Uptime <b>'+fmtUptime(j.uptime_sec)+'</b>'
+    +(j.version?' · firmware <b>'+j.version+'</b>':'')
+    +(j.soc?' · '+j.soc:'')+(j.kernel?' · kernel '+j.kernel:'')+mem;
+}
+$('devreboot').onclick=async()=>{
+  if(!confirm('Reboot the camera now? The stream drops for ~30 seconds while it restarts.'))return;
+  const j=await apiPost('/x/device.cgi?a=reboot','confirm=REBOOT');
+  if(j&&j.ok)$('devinfo').innerHTML='<span class="off">Rebooting…</span>';
+};
+
+/* -- Network (wifi IP: DHCP or static) -- */
+function paintNetMode(){ $('netstatic').hidden = $('netmode').value!=='static'; }
+$('netmode').onchange=paintNetMode;
+async function loadNet(){
+  const info=$('netinfo'); $('netmsg').textContent='';
+  const j=await apiGet('/x/net.cgi');
+  if(!j||!j.ok){ info.innerHTML='<span class="off">Network status unavailable.</span>'; return; }
+  info.innerHTML='Current IP <b>'+(j.current_ip||'—')+'</b>'+(j.mac?' · '+j.mac:'')
+    +' · '+(j.mode==='static'?'<b>static</b>':'DHCP');
+  $('netmode').value=j.mode==='static'?'static':'dhcp';
+  $('netaddr').value=j.address||''; $('netmask').value=j.netmask||''; $('netgw').value=j.gateway||'';
+  $('netdns1').value=j.dns1||''; $('netdns2').value=j.dns2||'';
+  paintNetMode();
+}
+$('netsave').onclick=async()=>{
+  const msg=$('netmsg'); msg.className='note';
+  const mode=$('netmode').value;
+  let body='mode='+mode;
+  if(mode==='static'){
+    const a=$('netaddr').value.trim(), m=$('netmask').value.trim(), g=$('netgw').value.trim(),
+          d1=$('netdns1').value.trim(), d2=$('netdns2').value.trim();
+    if(!a||!m){ msg.className='note bad'; msg.textContent='IP address and subnet mask are required.'; return; }
+    body+='&address='+encodeURIComponent(a)+'&netmask='+encodeURIComponent(m)+'&gateway='+encodeURIComponent(g)
+        +'&dns1='+encodeURIComponent(d1)+'&dns2='+encodeURIComponent(d2);
+    if(!confirm('Apply a STATIC IP of '+a+'?\n\nThis page will disconnect — reconnect at '+a+'. '
+       +'A wrong address, mask or gateway can make the camera unreachable.'))return;
+  }else{
+    if(!confirm('Switch to automatic (DHCP)?\n\nThis page will disconnect while the camera requests a '
+       +'new address from your router.'))return;
+  }
+  msg.textContent='Applying…';
+  const j=await apiPost('/x/net.cgi?a=set',body);
+  if(!j||!j.ok){ msg.className='note bad'; msg.textContent=(j&&j.error)||'Failed.'; return; }
+  msg.className='note ok';
+  if(mode==='static'){
+    // Give the interface a few seconds to bounce, then hop to the new address.
+    // The link is clickable for an immediate jump; the countdown auto-navigates.
+    const url='https://'+$('netaddr').value.trim()+'/';
+    let secs=5;
+    const paint=()=>{ msg.innerHTML='Applied — the camera is switching to this address now. '
+      +'Reconnecting to <a href="'+url+'">'+url+'</a> in <b id="netcd">'+secs+'</b>s… '
+      +'<span class="off">(click to go now)</span>'; };
+    paint();
+    const tick=setInterval(()=>{
+      secs--;
+      const cd=document.getElementById('netcd');
+      if(cd) cd.textContent=secs;
+      if(secs<=0){ clearInterval(tick); location.href=url; }
+    },1000);
+  }else{
+    msg.innerHTML='Applied. The camera is requesting a new address — find it on your router, then reconnect.';
+  }
+};
+
+/* -- Account (one Save; submits only what changed: device name, web password,
+      and/or ONVIF creds) -- */
+let onvUser0='', devName0='';
+async function loadAccount(){
+  const j=await apiGet('/x/account.cgi');
+  onvUser0=(j&&j.ok&&j.onvif_user)||'';
+  $('onvuser').value=onvUser0;
+  const d=await apiGet('/x/device.cgi');    // device name field lives on this tab
+  devName0=(d&&d.ok&&d.name)||'';
+  $('devname').value=devName0;
+  for(const id of ['pwcur','pwnew','pwnew2','onvpass'])$(id).value='';
+  $('accmsg').textContent='';
+}
+$('accsave').onclick=async()=>{
+  const msg=$('accmsg'); msg.className='note';
+  const dn=$('devname').value.trim();
+  const cur=$('pwcur').value, nw=$('pwnew').value, nw2=$('pwnew2').value;
+  const u=$('onvuser').value.trim(), p=$('onvpass').value;
+  const wantName = dn!==devName0;
+  const wantPw = !!(cur||nw||nw2);
+  const wantOnv = (u!==onvUser0) || !!p;
+  if(!wantName && !wantPw && !wantOnv){ msg.className='note off'; msg.textContent='No changes.'; return; }
+  if(wantName && !dn){ msg.className='note bad'; msg.textContent='Device name cannot be empty.'; return; }
+  if(wantPw){
+    if(!cur||!nw){ msg.className='note bad'; msg.textContent='Enter current and new password (or clear all three password fields).'; return; }
+    if(nw!==nw2){ msg.className='note bad'; msg.textContent='New passwords do not match.'; return; }
+    if(nw.length<6){ msg.className='note bad'; msg.textContent='New password must be at least 6 characters.'; return; }
+  }
+  if(wantOnv){
+    if(!u){ msg.className='note bad'; msg.textContent='ONVIF username cannot be empty.'; return; }
+    if(!p){ msg.className='note bad'; msg.textContent='Enter the ONVIF password too (both are set together).'; return; }
+  }
+  msg.textContent='Saving…';
+  const done=[]; let bad='';
+  if(wantName){
+    const j=await apiPost('/x/device.cgi?a=name','name='+encodeURIComponent(dn));
+    if(j&&j.ok){ done.push('device name'); devName0=dn; setCamName(j.name); } else bad=(j&&j.error)||'device name save failed';
+  }
+  if(wantPw && !bad){
+    const j=await apiPost('/x/account.cgi?a=webpass','cur='+encodeURIComponent(b64(cur))+'&new='+encodeURIComponent(b64(nw)));
+    if(j&&j.ok)done.push('password'); else bad=(j&&j.error)||'password change failed';
+  }
+  if(wantOnv && !bad){
+    const j=await apiPost('/x/account.cgi?a=onvif','user='+encodeURIComponent(u)+'&pass='+encodeURIComponent(b64(p)));
+    if(j&&j.ok){ done.push('ONVIF credentials'); onvUser0=u; } else bad=(j&&j.error)||'ONVIF save failed';
+  }
+  for(const id of ['pwcur','pwnew','pwnew2','onvpass'])$(id).value='';
+  if(bad){ msg.className='note bad'; msg.textContent=(done.length?('Saved '+done.join(' + ')+'. '):'')+'Error: '+bad; }
+  else{ msg.className='note ok'; msg.textContent='Saved '+done.join(' + ')+'.'; }
+};
+
+/* -- Overlays -- rod reports/accepts colours as 0xAARRGGBB; <input type=color>
+   is #RRGGBB, so convert (alpha pinned opaque). The elements list doesn't carry
+   per-element colour, so the picker defaults to white until you set one. */
+/* Visual overlay editor. rod reports/accepts colours as 0xAARRGGBB; the
+   <input type=color> is #RRGGBB, so convert (alpha pinned opaque). We keep a
+   working copy (osdCur) and a baseline (osdBase); Apply diffs them and sends
+   ONLY changed fields per element — re-sending position/font needlessly
+   reconfigures the OSD region and shreds the live H.264 stream. */
+function osdColorToHex(c){ const m=/^0x[0-9a-f]{2}([0-9a-f]{6})$/i.exec(c||''); return m?('#'+m[1]):'#ffffff'; }
+function hexToOsdColor(h){ const m=/^#([0-9a-f]{6})$/i.exec(h||''); return m?('0xFF'+m[1].toUpperCase()):'0xFFFFFFFF'; }
+const TF_SAMPLE={'%Y-%m-%d %H:%M:%S':'2026-08-20 14:30:00','%H:%M:%S':'14:30:00',
+                '%d/%m/%Y %H:%M':'20/08/2026 14:30','%b %d %H:%M':'Aug 20 14:30'};
+let osdCur=[], osdBase=[], osdSel=null, osdTfCur='%Y-%m-%d %H:%M:%S', osdTfBase='';
+function osdSample(e){
+  if(e.type!=='text') return 'LOGO';
+  if(e.name==='timestamp') return TF_SAMPLE[osdTfCur]||'2026-08-20 14:30:00';
+  let t=e.template||e.name;
+  return t.replace('%time%','14:30:00').replace('%uptime%','3d 4h')
+          .replace('%hostname%',($('camname').textContent||'camera'));
+}
+async function loadOsd(){
+  const msg=$('osdmsg'); msg.textContent=''; osdSel=null; $('osdeditor').hidden=true;
+  const frame=$('osdframe'); frame.innerHTML='<div class="osdhint">Loading…</div>';
+  const j=await apiGet('/x/osd.cgi');
+  if(!j||!j.ok){ frame.innerHTML='<div class="osdhint">Overlay control unavailable.</div>'; return; }
+  const cfg=(j.config&&j.config.config)||{}, els=(j.list&&j.list.elements)||[];
+  $('osdenable').checked = cfg.enabled!==false;
+  osdTfBase = cfg.time_format||'%Y-%m-%d %H:%M:%S'; osdTfCur=osdTfBase;
+  osdCur = els.map(e=>({name:e.name,type:e.type,visible:!!e.visible,position:e.position,
+                        font_size:+e.font_size||24,color:osdColorToHex(e.color),template:e.template||''}));
+  osdBase = osdCur.map(e=>Object.assign({},e));
+  renderOsdFrame();
+  if(!els.length) frame.innerHTML='<div class="osdhint">No overlay elements defined.</div>';
+}
+function renderOsdFrame(){
+  const frame=$('osdframe'); frame.innerHTML='';
+  for(const e of osdCur){
+    const el=document.createElement('div');
+    el.className='oel p-'+e.position+(e.visible?'':' hiddenel')+(e.name===osdSel?' sel':'')+(e.type!=='text'?' logo':'');
+    el.textContent=osdSample(e);
+    if(e.type==='text'){ el.style.color=e.color; el.style.fontSize=Math.max(9,e.font_size*0.42)+'px'; }
+    el.title=e.name;
+    el.onclick=()=>selectOsd(e.name);
+    frame.appendChild(el);
+  }
+}
+function selectOsd(name){
+  osdSel=name;
+  const e=osdCur.find(x=>x.name===name); if(!e)return;
+  $('osdedname').textContent=e.name+(e.name==='camera'?' (follows Device name)':'');
+  $('osded_vis').checked=e.visible;
+  $('osded_pos').value=e.position;
+  const isText=e.type==='text';
+  $('osded_fswrap').hidden=!isText; $('osded_colwrap').hidden=!isText;
+  if(isText){ $('osded_fs').value=String(e.font_size); $('osded_col').value=e.color; }
+  $('osded_tfwrap').hidden = e.name!=='timestamp';
+  if(e.name==='timestamp') $('osded_tf').value=osdTfCur;
+  $('osdeditor').hidden=false;
+  renderOsdFrame();
+}
+function osdEdit(fn){ const e=osdCur.find(x=>x.name===osdSel); if(!e)return; fn(e); renderOsdFrame(); }
+$('osded_vis').onchange=()=>osdEdit(e=>e.visible=$('osded_vis').checked);
+$('osded_pos').onchange=()=>osdEdit(e=>e.position=$('osded_pos').value);
+$('osded_fs').onchange =()=>osdEdit(e=>e.font_size=+$('osded_fs').value);
+$('osded_col').oninput =()=>osdEdit(e=>e.color=$('osded_col').value);
+$('osded_tf').onchange =()=>{ osdTfCur=$('osded_tf').value; renderOsdFrame(); };
+$('osdenable').onchange=async()=>{
+  const j=await apiPost('/x/osd.cgi?a=global','enabled='+($('osdenable').checked?1:0));
+  $('osdmsg').className='info';
+  $('osdmsg').innerHTML=(j&&j.ok)?'<span class="on">Overlays '+($('osdenable').checked?'on':'off')+'.</span>':'<span class="off">Failed</span>';
+};
+$('osdapply').onclick=async()=>{
+  const btn=$('osdapply'), msg=$('osdmsg');
+  // Diff each element against its baseline; collect only changed fields.
+  const changes=[];
+  for(const e of osdCur){
+    const b=osdBase.find(x=>x.name===e.name); if(!b)continue;
+    const parts=[];
+    if(e.visible!==b.visible) parts.push('visible='+(e.visible?1:0));
+    if(e.position!==b.position) parts.push('position='+encodeURIComponent(e.position));
+    if(e.type==='text' && e.font_size!==b.font_size) parts.push('font_size='+e.font_size);
+    if(e.type==='text' && e.color!==b.color) parts.push('color='+encodeURIComponent(hexToOsdColor(e.color)));
+    if(parts.length) changes.push('name='+encodeURIComponent(e.name)+'&'+parts.join('&'));
+  }
+  const tfChanged = osdTfCur!==osdTfBase;
+  if(!changes.length && !tfChanged){ msg.className='info'; msg.innerHTML='<span class="off">No changes.</span>'; return; }
+  btn.disabled=true; const was=btn.textContent; btn.textContent='Applying…';
+  let bad='';
+  for(const body of changes){ const j=await apiPost('/x/osd.cgi?a=element',body); if(!(j&&j.ok)){ bad=(j&&j.error)||'failed'; break; } }
+  if(tfChanged && !bad){ const j=await apiPost('/x/osd.cgi?a=global','time_format='+encodeURIComponent(osdTfCur)); if(!(j&&j.ok))bad=(j&&j.error)||'failed'; }
+  btn.disabled=false; btn.textContent=was;
+  msg.className='info';
+  msg.innerHTML=bad?('<span class="off">Error: '+bad+'</span>'):'<span class="on">Applied.</span>';
+  loadOsd();   // re-baseline from the daemon
+};
 
 connect();
 poll();
 loadPresets();
 pollRec();
+loadDevice();                // populate the top-bar device name on load
 setInterval(poll,2000);
 setInterval(pollRec,2000);   // on-video REC indicator
 setInterval(pollMotion,700);   // fast enough to see a zone flash, cheap enough to leave running

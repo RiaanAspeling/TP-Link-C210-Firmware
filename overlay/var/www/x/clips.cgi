@@ -27,13 +27,16 @@ SD_MNT=/mnt/mmcblk0p1
 STORAGE_PATH=$SD_MNT/raptor
 
 # --- query parse (no eval) ------------------------------------------------
-q_a=""; q_date=""; q_f=""
+q_a=""; q_date=""; q_f=""; q_d=""; q_name=""; q_to=""
 OLD_IFS=$IFS; IFS='&'
 for kv in ${QUERY_STRING:-}; do
 	case "$kv" in
 		a=*)    q_a=${kv#a=} ;;
 		date=*) q_date=${kv#date=} ;;
 		f=*)    q_f=${kv#f=} ;;
+		d=*)    q_d=${kv#d=} ;;
+		name=*) q_name=${kv#name=} ;;
+		to=*)   q_to=${kv#to=} ;;
 	esac
 done
 IFS=$OLD_IFS
@@ -41,6 +44,9 @@ IFS=$OLD_IFS
 urldecode() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
 q_date=$(urldecode "$q_date")
 q_f=$(urldecode "$q_f")
+q_d=$(urldecode "$q_d")
+q_name=$(urldecode "$q_name")
+q_to=$(urldecode "$q_to")
 
 json_hdr() {
 	printf 'Status: %s\r\n' "${1:-200 OK}"
@@ -75,6 +81,50 @@ resolve_f() {
 	case "$real/" in "$STORAGE_PATH"/*) ;; *) return 1 ;; esac
 	printf '%s' "$abs"
 }
+
+# Validate a client dir path (relative to storage_path); "" or "." = the root.
+# Same confinement as resolve_f, but for directories. Echoes the absolute path.
+resolve_dir() {
+	local rel="$1" abs real
+	case "$rel" in
+		''|'.') printf '%s' "$STORAGE_PATH"; return 0 ;;
+		/*|*..*) return 1 ;;
+		*[!0-9A-Za-z/._-]*) return 1 ;;
+	esac
+	abs="$STORAGE_PATH/$rel"
+	[ -d "$abs" ] || return 1
+	real=$(readlink -f "$abs" 2>/dev/null) || return 1
+	case "$real/" in "$STORAGE_PATH"/*) ;; *) return 1 ;; esac
+	printf '%s' "$abs"
+}
+
+# Validate a client path that may be a file OR a directory (for rename/move/
+# delete of either). Echoes the absolute path.
+resolve_any() {
+	local rel="$1" abs real
+	[ -n "$rel" ] || return 1
+	case "$rel" in
+		/*|*..*) return 1 ;;
+		*[!0-9A-Za-z/._-]*) return 1 ;;
+	esac
+	abs="$STORAGE_PATH/$rel"
+	[ -e "$abs" ] || return 1
+	real=$(readlink -f "$abs" 2>/dev/null) || return 1
+	case "$real/" in "$STORAGE_PATH"/*) ;; *) return 1 ;; esac
+	printf '%s' "$abs"
+}
+
+# A single path component (folder or file base name): no slash, no traversal.
+valid_name() {
+	case "$1" in
+		''|.|..) return 1 ;;
+		*/*) return 1 ;;
+		*[!0-9A-Za-z._-]*) return 1 ;;
+		*) [ "${#1}" -le 64 ] ;;
+	esac
+}
+
+require_post() { [ "${REQUEST_METHOD:-GET}" = POST ] || fail "POST required" "405 Method Not Allowed"; }
 
 # --- dates: one row per calendar day, with per-tree counts ----------------
 list_dates() {
@@ -203,11 +253,97 @@ del_batch() {
 	json_hdr; printf '{"ok":true,"deleted":%s,"failed":%s}\n' "$ok" "$bad"
 }
 
+# --- browse: one directory (sub-folders + clips) for the file manager ------
+list_browse() {
+	local rel="$q_d" dir; dir=$(resolve_dir "$rel") || fail "not found" "404 Not Found"
+	json_hdr
+	local up=""; case "$rel" in */*) up="${rel%/*}" ;; *) up="" ;; esac
+	printf '{"ok":true,"path":"%s","up":"%s","dirs":[' "$rel" "$up"
+	local first=1 name cnt by pre=""
+	[ -n "$rel" ] && pre="$rel/"
+	for name in $(ls -1 "$dir" 2>/dev/null | sort); do
+		[ -d "$dir/$name" ] || continue
+		case "$name" in *[!0-9A-Za-z._-]*) continue ;; esac
+		cnt=$(ls -1 "$dir/$name" 2>/dev/null | wc -l)
+		by=$(du -sk "$dir/$name" 2>/dev/null | awk '{print $1*1024}'); [ -n "$by" ] || by=0
+		[ "$first" = 1 ] || printf ','; first=0
+		printf '{"name":"%s","rel":"%s","count":%s,"bytes":%s}' "$name" "$pre$name" "$cnt" "$by"
+	done
+	printf '],"files":['
+	first=1
+	local base sz
+	for path in $(ls -1 "$dir"/*.mp4 2>/dev/null | sort -r); do
+		[ -f "$path" ] || continue
+		base=${path##*/}
+		sz=$(stat -c%s "$path" 2>/dev/null || echo 0)
+		[ "$first" = 1 ] || printf ','; first=0
+		printf '{"name":"%s","rel":"%s","bytes":%s}' "$base" "$pre$base" "$sz"
+	done
+	printf ']}\n'
+}
+
+# --- mkdir -----------------------------------------------------------------
+do_mkdir() {
+	require_post
+	local parent; parent=$(resolve_dir "$q_d") || fail "bad folder"
+	valid_name "$q_name" || fail "bad name"
+	[ -e "$parent/$q_name" ] && fail "already exists" "409 Conflict"
+	mkdir "$parent/$q_name" 2>/dev/null || fail "mkdir failed" "500 Internal Server Error"
+	json_hdr; printf '{"ok":true}\n'
+}
+
+# --- rename (within the same parent) ---------------------------------------
+do_rename() {
+	require_post
+	local abs; abs=$(resolve_any "$q_f") || fail "not found" "404 Not Found"
+	valid_name "$q_name" || fail "bad name"
+	# A clip must keep its .mp4 extension so it stays servable.
+	if [ -f "$abs" ]; then case "$q_name" in *.mp4) ;; *) fail "clip name must end in .mp4" ;; esac; fi
+	local parent="${abs%/*}"
+	[ -e "$parent/$q_name" ] && fail "target exists" "409 Conflict"
+	mv "$abs" "$parent/$q_name" 2>/dev/null || fail "rename failed" "500 Internal Server Error"
+	json_hdr; printf '{"ok":true}\n'
+}
+
+# --- move items into a folder (body "files=REL1,REL2,..."; ?to=<destdir>) ---
+do_move() {
+	require_post
+	local dest; dest=$(resolve_dir "$q_to") || fail "bad destination"
+	local len="${CONTENT_LENGTH:-0}" body="" list tok rel abs ok=0 bad=0
+	case "$len" in ''|*[!0-9]*) len=0 ;; esac
+	[ "$len" -gt 0 ] && [ "$len" -le 65536 ] && body=$(head -c "$len")
+	list="${body#files=}"; [ "$list" = "$body" ] && fail "missing files"
+	local OIFS=$IFS; IFS=','
+	for tok in $list; do
+		IFS=$OIFS
+		rel=$(urldecode "$tok")
+		if abs=$(resolve_any "$rel") && [ "${abs%/*}" != "$dest" ] && [ ! -e "$dest/${abs##*/}" ] \
+			&& mv "$abs" "$dest/" 2>/dev/null; then ok=$((ok + 1)); else bad=$((bad + 1)); fi
+		IFS=','
+	done
+	IFS=$OIFS
+	json_hdr; printf '{"ok":true,"moved":%s,"failed":%s}\n' "$ok" "$bad"
+}
+
+# --- delete a folder and everything under it -------------------------------
+do_deltree() {
+	require_post
+	local dir; dir=$(resolve_dir "$q_d") || fail "not found" "404 Not Found"
+	[ "$dir" = "$STORAGE_PATH" ] && fail "refusing to delete the root" "409 Conflict"
+	rm -rf "$dir" || fail "delete failed" "500 Internal Server Error"
+	json_hdr; printf '{"ok":true}\n'
+}
+
 case "$q_a" in
 	dates) list_dates ;;
 	list)  list_files ;;
+	browse) list_browse ;;
 	get)   serve_file ;;
 	del)   del_file ;;
 	delbatch) del_batch ;;
+	mkdir) do_mkdir ;;
+	rename) do_rename ;;
+	move)  do_move ;;
+	deltree) do_deltree ;;
 	*)     fail "unsupported action" ;;
 esac
