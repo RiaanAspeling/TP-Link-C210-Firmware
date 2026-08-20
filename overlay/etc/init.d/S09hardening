@@ -1,0 +1,31 @@
+#!/bin/sh
+# S09hardening — lock service accounts that ship with a default login password.
+#
+# The thingino-onvif package creates a "thingino" system user with a default
+# password ("thingino"). Its shell is /bin/false so it can't get an interactive
+# shell, BUT the lean WebUI's login.cgi authenticates ANY /etc/shadow user, so a
+# default-password service account is a WebUI (and RTSP-adjacent) back door.
+# Only root should have a usable login password — lock the rest here.
+#
+# Idempotent, runs early (before dropbear S30 / uhttpd) every boot, so it also
+# re-applies after a firmware reset that restores the packaged shadow.
+
+LOCK_USERS="thingino"
+
+lock_pw() {
+	local u="$1" h
+	h=$(awk -F: -v u="$u" '$1==u{print $2}' /etc/shadow 2>/dev/null)
+	case "$h" in
+		''|'*'|'!'*) return 0 ;;          # already locked/empty
+		*) sed -i "s#^\(${u}:\)[^:]*:#\1*:#" /etc/shadow ;;
+	esac
+}
+
+case "$1" in
+	start|'')
+		for u in $LOCK_USERS; do lock_pw "$u"; done
+		;;
+	stop)
+		;;
+esac
+exit 0

@@ -48,7 +48,8 @@ if [ -f "$DEFCFG" ]; then
 fi
 
 # ensure our init scripts + helper daemons are executable in the tree
-chmod 0755 "$THINGINO_DIR/overlay/etc/init.d/S59motor" \
+chmod 0755 "$THINGINO_DIR/overlay/etc/init.d/S09hardening" \
+           "$THINGINO_DIR/overlay/etc/init.d/S59motor" \
            "$THINGINO_DIR/overlay/etc/init.d/S97daynight" \
            "$THINGINO_DIR/overlay/etc/init.d/S61ptz-glide" \
            "$THINGINO_DIR/overlay/usr/sbin/daynight" \
