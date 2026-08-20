@@ -1,0 +1,111 @@
+rod: persist per-element OSD changes + report element colour
+
+set-element / show-element updated only the in-memory element, never the
+shared config object, so `config save` never wrote per-element color,
+font_size, position, visible, etc. A colour picked in the WebUI reverted to
+white on the next boot. Mirror each runtime change into the [osd.<name>]
+section via rss_config_set_str so a save persists it (rod already reads
+these keys back on load).
+
+Also add the effective text colour to the 'elements' list so a UI can show
+the current colour instead of guessing white.
+
+diff --git a/rod/rod_ctrl.c b/rod/rod_ctrl.c
+index 5665467..fc76250 100644
+--- a/rod/rod_ctrl.c
++++ b/rod/rod_ctrl.c
+@@ -162,6 +162,14 @@ static int handle_elements_list(rod_state_t *st, char *resp, int resp_size)
+ 			cJSON_AddStringToObject(obj, "template", e->tmpl);
+ 		int fs = e->font_size > 0 ? e->font_size : st->settings.font_size;
+ 		cJSON_AddNumberToObject(obj, "font_size", fs);
++		/* Report the effective text colour so a UI can show the real value
++		 * (the picker used to default to white for lack of it). */
++		if (e->type == ROD_ELEM_TEXT) {
++			char cbuf[16];
++			snprintf(cbuf, sizeof(cbuf), "0x%08X",
++				 e->has_color ? e->color : st->settings.font_color);
++			cJSON_AddStringToObject(obj, "color", cbuf);
++		}
+ 		cJSON_AddItemToArray(arr, obj);
+ 	}
+ 	return rss_ctrl_resp_json(resp, resp_size, r);
+@@ -271,6 +279,17 @@ static int handle_remove_element(rod_state_t *st, const char *cmd_json, char *re
+ 	return rss_ctrl_resp_ok(resp, resp_size);
+ }
+ 
++/* Persist a per-element [osd.<name>] key into the shared config so a later
++ * `config save` writes it out. Runtime set-element / show-element changes used
++ * to touch only the in-memory element, so they were silently lost on reboot
++ * (e.g. a chosen overlay colour reverted to white). */
++static void osd_elem_cfg_set(rod_state_t *st, const char *name, const char *key, const char *val)
++{
++	char sect[ROD_ELEM_NAME_LEN + 8];
++	snprintf(sect, sizeof(sect), "osd.%s", name);
++	rss_config_set_str(st->cfg, sect, key, val);
++}
++
+ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp, int resp_size)
+ {
+ 	char name[ROD_ELEM_NAME_LEN] = "";
+@@ -288,10 +307,12 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
+ 		rss_strlcpy(e->tmpl, val, sizeof(e->tmpl));
+ 		e->last_expanded[0] = '\0';
+ 		mark_element_dirty(e, st->stream_count);
++		osd_elem_cfg_set(st, name, "template", val);
+ 	}
+ 
+ 	if (rss_json_get_str(cmd_json, "position", val, sizeof(val)) == 0) {
+ 		rss_strlcpy(e->position, val, sizeof(e->position));
++		osd_elem_cfg_set(st, name, "position", val);
+ 		for (int s = 0; s < st->stream_count; s++) {
+ 			char fwd[128];
+ 			cJSON *j = cJSON_CreateObject();
+@@ -313,23 +334,30 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
+ 	if (rss_json_get_int(cmd_json, "align", &ival) == 0 && ival >= 0 && ival <= 2) {
+ 		e->align = ival;
+ 		mark_element_dirty(e, st->stream_count);
++		osd_elem_cfg_set(st, name, "align",
++				 ival == 2 ? "right" : ival == 1 ? "center" : "left");
+ 	}
+ 
+ 	if (rss_json_get_str(cmd_json, "color", val, sizeof(val)) == 0) {
+ 		e->color = (uint32_t)strtoul(val, NULL, 0);
+ 		e->has_color = true;
+ 		mark_element_dirty(e, st->stream_count);
++		osd_elem_cfg_set(st, name, "color", val);
+ 	}
+ 
+ 	if (rss_json_get_str(cmd_json, "stroke_color", val, sizeof(val)) == 0) {
+ 		e->stroke_color = (uint32_t)strtoul(val, NULL, 0);
+ 		e->has_stroke_color = true;
+ 		mark_element_dirty(e, st->stream_count);
++		osd_elem_cfg_set(st, name, "stroke_color", val);
+ 	}
+ 
+ 	if (rss_json_get_int(cmd_json, "stroke_size", &ival) == 0 && ival >= 0 && ival <= 5) {
+ 		e->stroke_size = ival;
+ 		mark_element_dirty(e, st->stream_count);
++		char nb[16];
++		snprintf(nb, sizeof(nb), "%d", ival);
++		osd_elem_cfg_set(st, name, "stroke_size", nb);
+ 	}
+ 
+ 	int new_font_size = 0;
+@@ -337,6 +365,9 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
+ 	    new_font_size <= 72 && new_font_size != e->font_size &&
+ 	    (e->type == ROD_ELEM_TEXT || e->type == ROD_ELEM_RECEIPT)) {
+ 		e->font_size = new_font_size;
++		char nb[16];
++		snprintf(nb, sizeof(nb), "%d", new_font_size);
++		osd_elem_cfg_set(st, name, "font_size", nb);
+ 		for (int s = 0; s < st->stream_count; s++) {
+ 			int fs = new_font_size;
+ 			if (s > 0 && st->stream_h[0] > 0) {
+@@ -451,6 +482,7 @@ static int handle_show_hide(rod_state_t *st, const char *cmd_json, char *resp, i
+ 		return rss_ctrl_resp_error(resp, resp_size, "not found");
+ 
+ 	e->visible = show;
++	osd_elem_cfg_set(st, name, "visible", show ? "true" : "false");
+ 
+ 	for (int s = 0; s < st->stream_count; s++) {
+ 		char fwd[128];
