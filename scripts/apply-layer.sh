@@ -53,6 +53,7 @@ chmod 0755 "$THINGINO_DIR/overlay/etc/init.d/S09hardening" \
            "$THINGINO_DIR/overlay/etc/init.d/S97daynight" \
            "$THINGINO_DIR/overlay/etc/init.d/S61ptz-glide" \
            "$THINGINO_DIR/overlay/usr/sbin/daynight" \
+           "$THINGINO_DIR/overlay/usr/sbin/ircut" \
            "$THINGINO_DIR/overlay/usr/sbin/ptz-glide" 2>/dev/null || true
 
 # CGIs must be executable or uhttpd serves them as plain text. The ONVIF

@@ -1,0 +1,33 @@
+#!/bin/sh
+# ircut - bridge the ONVIF Imaging IrCutFilter (and the relay/aux hooks in
+# /etc/onvif.json) to the daynight day/night controller.
+#
+# The ONVIF server (onvif.cgi) runs `ircut on|off|auto` for SetImagingSettings
+# IrCutFilter = On|Off|Auto. Rather than poking the IR-cut hardware directly
+# (which would fight the daynight daemon), we write the daemon's live control
+# file /etc/daynight.force - the exact same path the WebUI "IR" button uses -
+# so ONVIF, the WebUI and the daemon all share one control point.
+#
+# ONVIF semantics: On  = IR-cut filter engaged (blocks IR) = colour / daytime
+#                  Off = IR-cut filter removed (passes IR) = infrared / night
+#                  Auto = automatic (the daemon decides)
+#
+# onvif.cgi is stateless per request and reports GetImagingSettings from the
+# static imaging.0.ircut_state in /etc/onvif.json, and only runs the command
+# when the requested mode differs from that stored value - so we also write the
+# mode back with jct, which keeps GetImagingSettings truthful and lets a switch
+# back to Auto actually fire.
+FORCE=/etc/daynight.force
+CFG=/etc/onvif.json
+
+case "$1" in
+	on|day|color|colour) mode=day;   state=On   ;;
+	off|night|ir|nightmode) mode=night; state=Off  ;;
+	auto|'')             mode=auto;  state=Auto ;;
+	*) echo "usage: ircut on|off|auto" >&2; exit 1 ;;
+esac
+
+echo "$mode" > "$FORCE" 2>/dev/null
+jct "$CFG" set imaging.0.ircut_state "$state" >/dev/null 2>&1
+logger -t ircut "ONVIF IrCutFilter=$state -> daynight force=$mode"
+exit 0
