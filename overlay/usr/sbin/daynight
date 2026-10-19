@@ -1,46 +1,102 @@
 #!/bin/sh
-# daynight - IR-cut + IR-LED day/night controller for the Tapo C210
-# (TMI8150 SPI IR-cut chardev + GPIO IR-LED). Brightness = sensor analog gain
-# from the ISP, which rises as the scene gets darker.
+# daynight - IR-cut + IR-LED day/night controller for the Tapo C210/C211
+# (TMI8150/TMI8152 SPI IR-cut chardev + GPIO IR-LED).
+#
+# Colour by default; switch to IR only when the scene is genuinely too dark to
+# give a usable image, and back to colour as soon as there is usable light.
+# No colour-temperature (too noisy under IR), no IR-off sampling blink, no fixed
+# schedule. Two gain metrics, each used only where it stays meaningful:
+#
+#   DAY  -> NIGHT : ISP digital gain (dgain) reaches its ceiling (dark_dgain) -
+#                   the sensor is maxed out, i.e. the scene is truly dark. dgain
+#                   is clean in day mode (IR-cut filter in, LED off).
+#   NIGHT -> DAY : SENSOR analog gain falls below a LEARNED threshold. Under IR,
+#                   dgain floors to ~0 (useless) but analog gain stays elevated
+#                   and drops when real daylight overpowers the IR - a blink-free
+#                   return signal (cf. Vicon gain-hysteresis; analog is used
+#                   because it does not crash under close-range indoor IR).
+#
+# Auto-calibration: the night->day return is tentative - after returning to
+# colour we check dgain (now measurable). If the scene is still too dark the
+# return was premature: revert to IR and LOWER the return threshold. If it is
+# genuinely usable, confirm and relax the threshold up slightly. Each camera
+# converges on the analog level that means "genuinely bright" with no per-unit
+# tuning; the learned value persists to $STATE and survives reboot.
+#
+# Anti-chatter: consecutive-sample debounce on each trigger + a minimum dwell
+# after every switch. force=auto|night|day overrides the whole decision.
 CFG=/etc/thingino.json
+STATE="${STATE:-/etc/daynight.thr}"
 ISP="${ISP:-/proc/jz/isp/isp-m0}"
 IRCUT="${IRCUT:-/dev/tmi8152_ir_cut}"
-IRLED="${IRLED:-49}"                      # ir850 LED gpio (active-low)
-GPIO="${GPIO:-gpio}"                       # gpio command (override in tests)
+IRLED="${IRLED:-49}"                       # ir850 LED gpio (active-low)
+GPIO="${GPIO:-gpio}"
 jcfg(){ jct "$CFG" get "$1" 2>/dev/null; }
-# thresholds (thingino.json daynight.* overrides, else env, else default)
-NIGHT_GAIN="${NIGHT_GAIN:-$(jcfg daynight.night_gain)}"; NIGHT_GAIN="${NIGHT_GAIN:-150}"
-DAY_GAIN="${DAY_GAIN:-$(jcfg daynight.day_gain)}";       DAY_GAIN="${DAY_GAIN:-110}"
-POLL="${POLL:-$(jcfg daynight.poll)}";                   POLL="${POLL:-5}"
-NIGHT_DEBOUNCE="${NIGHT_DEBOUNCE:-6}"
-DAYCHECK_EVERY="${DAYCHECK_EVERY:-12}"
+# config: thingino.json daynight.* overrides, else env, else default
+FORCE="${FORCE:-$(jcfg daynight.force)}";               FORCE="${FORCE:-auto}"
+DARK_DGAIN="${DARK_DGAIN:-$(jcfg daynight.dark_dgain)}"; DARK_DGAIN="${DARK_DGAIN:-78}"
+ANALOG_INIT="${ANALOG_INIT:-$(jcfg daynight.day_analog)}"; ANALOG_INIT="${ANALOG_INIT:-130}"
+ANALOG_MIN="${ANALOG_MIN:-$(jcfg daynight.analog_min)}"; ANALOG_MIN="${ANALOG_MIN:-40}"
+ANALOG_MAX="${ANALOG_MAX:-$(jcfg daynight.analog_max)}"; ANALOG_MAX="${ANALOG_MAX:-150}"
+STEP_DOWN="${STEP_DOWN:-$(jcfg daynight.step_down)}";   STEP_DOWN="${STEP_DOWN:-8}"
+STEP_UP="${STEP_UP:-$(jcfg daynight.step_up)}";         STEP_UP="${STEP_UP:-2}"
+POLL="${POLL:-$(jcfg daynight.poll)}";                  POLL="${POLL:-5}"
+ENTER_DEBOUNCE="${ENTER_DEBOUNCE:-$(jcfg daynight.enter_debounce)}"; ENTER_DEBOUNCE="${ENTER_DEBOUNCE:-24}"
+EXIT_DEBOUNCE="${EXIT_DEBOUNCE:-$(jcfg daynight.exit_debounce)}";    EXIT_DEBOUNCE="${EXIT_DEBOUNCE:-24}"
+MIN_DWELL="${MIN_DWELL:-$(jcfg daynight.min_dwell)}";   MIN_DWELL="${MIN_DWELL:-600}"
+CONFIRM_SETTLE="${CONFIRM_SETTLE:-3}"      # polls to let AE settle after a return
+CONFIRM_NEED="${CONFIRM_NEED:-15}"         # consecutive good polls to confirm colour
 
-gain(){ awk -F: '/^SENSOR analog gain/{gsub(/ /,"",$2);print $2;exit}' "$ISP" 2>/dev/null; }
+dgain(){  awk -F: '/^ISP digital gain/{gsub(/[^0-9]/,"",$2);print $2;exit}' "$ISP" 2>/dev/null; }
+analog(){ awk -F: '/^SENSOR analog gain/{gsub(/[^0-9]/,"",$2);print $2;exit}' "$ISP" 2>/dev/null; }
+now(){ cut -d. -f1 /proc/uptime; }
+clampd(){ [ "$1" -lt "$ANALOG_MIN" ] && echo "$ANALOG_MIN" || { [ "$1" -gt "$ANALOG_MAX" ] && echo "$ANALOG_MAX" || echo "$1"; }; }
+save_thr(){ echo "$THR" > "$STATE" 2>/dev/null; }
 led_on(){  $GPIO set "$IRLED" 0 2>/dev/null; }   # active-low: 0 = on
 led_off(){ $GPIO set "$IRLED" 1 2>/dev/null; }   # 1 = off
-day_mode(){   printf 1 > "$IRCUT"; led_off; }    # filter IN  = day
+day_mode(){   printf 1 > "$IRCUT"; led_off; }    # filter IN  = day/colour
 night_mode(){ printf 0 > "$IRCUT"; led_on;  }    # filter OUT + IR on = night
 
 pkill -f /usr/bin/ric 2>/dev/null                 # ric can't drive the SPI IR-cut; keep it down
 $GPIO output "$IRLED" 2>/dev/null
-day_mode                                          # boot default: DAY
-state=day; dark=0; cnt=0
-logger -t daynight "started NIGHT_GAIN=$NIGHT_GAIN DAY_GAIN=$DAY_GAIN POLL=$POLL" 2>/dev/null
+
+if [ "$FORCE" = night ]; then night_mode; logger -t daynight "forced NIGHT"; while true; do sleep 3600; night_mode; done; fi
+if [ "$FORCE" = day ];   then day_mode;   logger -t daynight "forced DAY";   while true; do sleep 3600; day_mode;   done; fi
+
+THR=$(cat "$STATE" 2>/dev/null); case "$THR" in ''|*[!0-9]*) THR="$ANALOG_INIT";; esac
+THR=$(clampd "$THR")
+day_mode; state=day; dark=0; light=0; last=$(now); confirming=0; settle=0; good=0
+logger -t daynight "started dark_dgain=$DARK_DGAIN learned_thr=$THR dwell=${MIN_DWELL}s"
 while true; do
-  g=$(gain); [ -z "$g" ] && g=0
+  t=$(now); dwell=$(( t - last ))
   if [ "$state" = day ]; then
-    if [ "$g" -ge "$NIGHT_GAIN" ]; then dark=$((dark+1)); else dark=0; fi
-    if [ "$dark" -ge "$NIGHT_DEBOUNCE" ]; then
-      state=night; dark=0; cnt=0; night_mode
-      logger -t daynight "-> NIGHT gain=$g" 2>/dev/null
+    g=$(dgain); [ -z "$g" ] && g=0
+    if [ "$confirming" = 1 ]; then
+      if [ "$settle" -gt 0 ]; then settle=$((settle-1))
+      elif [ "$g" -ge "$DARK_DGAIN" ]; then
+        night_mode; state=night; last=$t; confirming=0; light=0
+        THR=$(clampd $((THR-STEP_DOWN))); save_thr
+        logger -t daynight "return FAILED dgain=$g -> IR, lower thr=$THR"
+      else
+        good=$((good+1))
+        if [ "$good" -ge "$CONFIRM_NEED" ]; then
+          confirming=0; THR=$(clampd $((THR+STEP_UP))); save_thr
+          logger -t daynight "return CONFIRMED -> COLOUR, thr=$THR"
+        fi
+      fi
+    else
+      if [ "$g" -ge "$DARK_DGAIN" ]; then dark=$((dark+1)); else dark=0; fi
+      if [ "$dark" -ge "$ENTER_DEBOUNCE" ] && [ "$dwell" -ge "$MIN_DWELL" ]; then
+        night_mode; state=night; last=$t; dark=0
+        logger -t daynight "-> NIGHT dgain=$g"
+      fi
     fi
   else
-    cnt=$((cnt+1))
-    if [ "$cnt" -ge "$DAYCHECK_EVERY" ]; then
-      cnt=0; led_off; sleep 3; gc=$(gain); [ -z "$gc" ] && gc=999
-      if [ "$gc" -le "$DAY_GAIN" ]; then
-        state=day; day_mode; logger -t daynight "-> DAY gain=$gc" 2>/dev/null
-      else led_on; fi
+    a=$(analog); [ -z "$a" ] && a=999
+    if [ "$a" -le "$THR" ]; then light=$((light+1)); else light=0; fi
+    if [ "$light" -ge "$EXIT_DEBOUNCE" ] && [ "$dwell" -ge "$MIN_DWELL" ]; then
+      day_mode; state=day; last=$t; light=0; confirming=1; settle=$CONFIRM_SETTLE; good=0
+      logger -t daynight "-> COLOUR tentative analog=$a thr=$THR"
     fi
   fi
   sleep "$POLL"
