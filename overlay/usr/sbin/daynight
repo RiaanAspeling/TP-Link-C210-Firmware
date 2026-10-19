@@ -24,16 +24,29 @@
 # tuning; the learned value persists to $STATE and survives reboot.
 #
 # Anti-chatter: consecutive-sample debounce on each trigger + a minimum dwell
-# after every switch. force=auto|night|day overrides the whole decision.
+# after every switch.
+#
+# Live control (read every poll, so the WebUI changes take effect at once):
+#   $FORCEFILE  auto|day|night  override the whole decision (day = colour/IR off,
+#               night = IR on, auto = automatic). Default = daynight.force / auto.
+#   $CALFILE    1|0             1 = auto-calibrate the return threshold (default);
+#               0 = manual: use $STATE verbatim and never learn/adjust it.
+# The daemon publishes its live state to $STATUS (state/force/cal/thr/dgain/
+# analog) for the WebUI readout. All three files live on the persistent overlay
+# (/etc) except $STATUS, which is transient (/run).
 CFG=/etc/thingino.json
 STATE="${STATE:-/etc/daynight.thr}"
+FORCEFILE="${FORCEFILE:-/etc/daynight.force}"
+CALFILE="${CALFILE:-/etc/daynight.cal}"
+STATUS="${STATUS:-/run/daynight.state}"
 ISP="${ISP:-/proc/jz/isp/isp-m0}"
 IRCUT="${IRCUT:-/dev/tmi8152_ir_cut}"
 IRLED="${IRLED:-49}"                       # ir850 LED gpio (active-low)
 GPIO="${GPIO:-gpio}"
 jcfg(){ jct "$CFG" get "$1" 2>/dev/null; }
 # config: thingino.json daynight.* overrides, else env, else default
-FORCE="${FORCE:-$(jcfg daynight.force)}";               FORCE="${FORCE:-auto}"
+FORCE_DEFAULT="${FORCE:-$(jcfg daynight.force)}";         FORCE_DEFAULT="${FORCE_DEFAULT:-auto}"
+CAL_DEFAULT="${CALIBRATE:-$(jcfg daynight.calibrate)}";   CAL_DEFAULT="${CAL_DEFAULT:-1}"
 DARK_DGAIN="${DARK_DGAIN:-$(jcfg daynight.dark_dgain)}"; DARK_DGAIN="${DARK_DGAIN:-78}"
 ANALOG_INIT="${ANALOG_INIT:-$(jcfg daynight.day_analog)}"; ANALOG_INIT="${ANALOG_INIT:-130}"
 ANALOG_MIN="${ANALOG_MIN:-$(jcfg daynight.analog_min)}"; ANALOG_MIN="${ANALOG_MIN:-40}"
@@ -52,6 +65,9 @@ analog(){ awk -F: '/^SENSOR analog gain/{gsub(/[^0-9]/,"",$2);print $2;exit}' "$
 now(){ cut -d. -f1 /proc/uptime; }
 clampd(){ [ "$1" -lt "$ANALOG_MIN" ] && echo "$ANALOG_MIN" || { [ "$1" -gt "$ANALOG_MAX" ] && echo "$ANALOG_MAX" || echo "$1"; }; }
 save_thr(){ echo "$THR" > "$STATE" 2>/dev/null; }
+read_force(){ f=$(cat "$FORCEFILE" 2>/dev/null); case "$f" in auto|day|night) printf %s "$f";; *) printf %s "$FORCE_DEFAULT";; esac; }
+read_cal(){   c=$(cat "$CALFILE"   2>/dev/null); case "$c" in 0) printf 0;; 1) printf 1;; *) printf %s "$CAL_DEFAULT";; esac; }
+publish(){ echo "state=$state force=$force cal=$cal thr=$THR dgain=$1 analog=$2 t=$(now)" > "$STATUS" 2>/dev/null; }
 led_on(){  $GPIO set "$IRLED" 0 2>/dev/null; }   # active-low: 0 = on
 led_off(){ $GPIO set "$IRLED" 1 2>/dev/null; }   # 1 = off
 day_mode(){   printf 1 > "$IRCUT"; led_off; }    # filter IN  = day/colour
@@ -60,28 +76,55 @@ night_mode(){ printf 0 > "$IRCUT"; led_on;  }    # filter OUT + IR on = night
 pkill -f /usr/bin/ric 2>/dev/null                 # ric can't drive the SPI IR-cut; keep it down
 $GPIO output "$IRLED" 2>/dev/null
 
-if [ "$FORCE" = night ]; then night_mode; logger -t daynight "forced NIGHT"; while true; do sleep 3600; night_mode; done; fi
-if [ "$FORCE" = day ];   then day_mode;   logger -t daynight "forced DAY";   while true; do sleep 3600; day_mode;   done; fi
-
 THR=$(cat "$STATE" 2>/dev/null); case "$THR" in ''|*[!0-9]*) THR="$ANALOG_INIT";; esac
 THR=$(clampd "$THR")
 day_mode; state=day; dark=0; light=0; last=$(now); confirming=0; settle=0; good=0
-logger -t daynight "started dark_dgain=$DARK_DGAIN learned_thr=$THR dwell=${MIN_DWELL}s"
+force=$(read_force); cal=$(read_cal); prev_force=auto
+logger -t daynight "started dark_dgain=$DARK_DGAIN learned_thr=$THR dwell=${MIN_DWELL}s force=$force cal=$cal"
 while true; do
   t=$(now); dwell=$(( t - last ))
+  force=$(read_force); cal=$(read_cal)
+  g=$(dgain); [ -z "$g" ] && g=0
+  a=$(analog); [ -z "$a" ] && a=999
+
+  # --- forced override (live) -------------------------------------------
+  if [ "$force" != auto ]; then
+    if [ "$force" != "$prev_force" ]; then
+      if [ "$force" = night ]; then night_mode; state=night; else day_mode; state=day; fi
+      last=$t; dark=0; light=0; confirming=0
+      logger -t daynight "forced $force"
+    fi
+    prev_force=$force
+    publish "$g" "$a"
+    sleep "$POLL"; continue
+  fi
+  if [ "$prev_force" != auto ]; then          # just returned to automatic
+    last=$t; dark=0; light=0; confirming=0
+    logger -t daynight "force cleared -> auto (state=$state)"
+  fi
+  prev_force=auto
+
+  # In manual mode the return threshold follows the user's value and is never
+  # learned; in auto mode THR is the in-memory learned value.
+  if [ "$cal" = 0 ]; then
+    m=$(cat "$STATE" 2>/dev/null); case "$m" in ''|*[!0-9]*) ;; *) THR=$(clampd "$m");; esac
+  fi
+
   if [ "$state" = day ]; then
-    g=$(dgain); [ -z "$g" ] && g=0
     if [ "$confirming" = 1 ]; then
       if [ "$settle" -gt 0 ]; then settle=$((settle-1))
       elif [ "$g" -ge "$DARK_DGAIN" ]; then
         night_mode; state=night; last=$t; confirming=0; light=0
-        THR=$(clampd $((THR-STEP_DOWN))); save_thr
-        logger -t daynight "return FAILED dgain=$g -> IR, lower thr=$THR"
+        if [ "$cal" = 1 ]; then THR=$(clampd $((THR-STEP_DOWN))); save_thr
+          logger -t daynight "return FAILED dgain=$g -> IR, lower thr=$THR"
+        else logger -t daynight "return FAILED dgain=$g -> IR (manual thr=$THR)"; fi
       else
         good=$((good+1))
         if [ "$good" -ge "$CONFIRM_NEED" ]; then
-          confirming=0; THR=$(clampd $((THR+STEP_UP))); save_thr
-          logger -t daynight "return CONFIRMED -> COLOUR, thr=$THR"
+          confirming=0
+          if [ "$cal" = 1 ]; then THR=$(clampd $((THR+STEP_UP))); save_thr
+            logger -t daynight "return CONFIRMED -> COLOUR, thr=$THR"
+          else logger -t daynight "return CONFIRMED -> COLOUR (manual thr=$THR)"; fi
         fi
       fi
     else
@@ -92,12 +135,12 @@ while true; do
       fi
     fi
   else
-    a=$(analog); [ -z "$a" ] && a=999
     if [ "$a" -le "$THR" ]; then light=$((light+1)); else light=0; fi
     if [ "$light" -ge "$EXIT_DEBOUNCE" ] && [ "$dwell" -ge "$MIN_DWELL" ]; then
       day_mode; state=day; last=$t; light=0; confirming=1; settle=$CONFIRM_SETTLE; good=0
       logger -t daynight "-> COLOUR tentative analog=$a thr=$THR"
     fi
   fi
+  publish "$g" "$a"
   sleep "$POLL"
 done

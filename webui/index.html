@@ -311,6 +311,7 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
   <span id="state"></span>
   <span class="sp"></span>
   <button id="sound">Sound: off</button>
+  <button id="irbtn" title="Day/night IR — click to cycle: Auto → IR off (colour) → IR on (night)">IR: …</button>
   <button id="videobtn" title="Stream, frame rate and bitrate">Video ▾</button>
   <button id="recbtn" title="Browse SD-card recordings" hidden>🎞 Recordings</button>
   <button id="setbtn" title="Settings — device, account, overlays, recording, SD card, motion">⚙ Settings</button>
@@ -371,6 +372,7 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
       <button class="setnavbtn" data-sec="overlays">Overlays</button>
       <button class="setnavbtn" data-sec="recording">Recording</button>
       <button class="setnavbtn" data-sec="motion">Motion</button>
+      <button class="setnavbtn" data-sec="daynight">Day / night</button>
       <button class="setnavbtn" data-sec="network">Network</button>
       <button class="setnavbtn" data-sec="device">Device &amp; system</button>
     </nav>
@@ -641,6 +643,50 @@ body:not(.show-bot) #presets{transform:translate(-50%,calc(100% + 28px));opacity
         </div></div>
       </section>
 
+      <!-- DAY / NIGHT (IR-CUT) --------------------------------------------->
+      <section class="setsec" id="sec-daynight">
+        <div class="seccontent">
+          <h2>Day / night mode</h2>
+          <div class="info" id="dninfo">Loading…</div>
+          <label>IR mode
+            <select id="dnmode">
+              <option value="auto">Auto (recommended)</option>
+              <option value="day">Daytime — colour, IR off</option>
+              <option value="night">Night — IR on</option>
+            </select>
+          </label>
+          <p class="note">In <em>Auto</em> the camera stays in colour and only switches to
+             infrared when the scene is genuinely too dark to see. <em>Daytime</em> and
+             <em>Night</em> hold one mode regardless of light. This is the same control as the
+             <em>IR</em> button on the main screen.</p>
+          <hr class="rule">
+          <h2>Return threshold</h2>
+          <label>Threshold calibration
+            <select id="dncal">
+              <option value="auto">Auto-calibrate (recommended)</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
+          <div id="dnmanualwrap" hidden>
+            <label>Return threshold: <b id="dnthrval">—</b>
+              <input type="range" id="dnthr" min="40" max="150" step="1"
+                     style="accent-color:var(--accent);width:100%">
+            </label>
+            <p class="note">Controls when night mode returns to colour (sensor analog gain).
+               <em>Higher</em> = return to colour sooner, in dimmer light.
+               <em>Lower</em> = stay in infrared longer, only return when it's clearly bright.</p>
+          </div>
+          <p class="note" id="dnmsg"></p>
+          <p class="note">Auto-calibrate learns this camera's own threshold over time and keeps it
+             stable — leave it on unless the automatic point is switching too early or too late for
+             this scene. Only the <em>Auto</em> IR mode uses the threshold.</p>
+        </div>
+        <div class="setfoot"><div class="setfootinner">
+          <span class="sp"></span>
+          <button class="act go" id="dnsave">Apply threshold settings</button>
+        </div></div>
+      </section>
+
     </div>
   </div>
 </div>
@@ -896,6 +942,7 @@ const SECTION_LOAD={
   overlays: ()=>loadOsd(),
   recording:()=>loadSdStatus(),
   motion:   ()=>{ loadSdStatus(); loadMotionZones(); },
+  daynight: ()=>loadDaynight(),
   network:  ()=>loadNet(),
 };
 function showSection(key){
@@ -962,6 +1009,77 @@ function paintSound(){
 soundBtn.onclick=()=>{ soundOn=!soundOn; localStorage.setItem(SKEY,soundOn?'1':'0');
                        paintSound(); connect(); };
 paintSound();
+
+/* ----- Day/night (IR-cut) ------------------------------------------------
+   One daynight.cgi drives the controller's live force/calibration files. The
+   top-bar IR button cycles the mode; the Settings "Day / night" tab mirrors it
+   and exposes the manual return threshold. */
+const irBtn=$('irbtn');
+const IR_MODES=['auto','day','night'];
+const IR_LABEL={auto:'IR: Auto',day:'IR: Off',night:'IR: On'};
+let dnState=null;
+async function dnApi(qs,opts){
+  const r=await fetch('/x/daynight.cgi'+(qs?('?'+qs):''),Object.assign({cache:'no-store'},opts||{}));
+  if(r.status===401||r.status===403){location.replace('/login.html');return null;}
+  return r.json().catch(()=>null);
+}
+function paintDaynight(j){
+  if(!j||!j.ok)return;
+  dnState=j;
+  // top-bar button shows the CURRENT mode
+  irBtn.textContent=IR_LABEL[j.mode]||'IR: …';
+  const live = j.state==='night' ? 'Night (IR on)'
+             : j.state==='day'   ? 'Colour (day)'
+             : '—';
+  irBtn.title=`Day/night IR — now: ${live}, mode ${j.mode}. Click to cycle: Auto → IR off → IR on`;
+  // settings readout + controls (only if the tab exists in the DOM)
+  const info=$('dninfo'); if(info){
+    const cls=j.state==='day'?'on':(j.state==='night'?'off':'');
+    info.innerHTML=`Currently <b class="${cls}">${live}</b>`
+      +` · return threshold <b>${j.threshold||'—'}</b> (${j.calibrate})`
+      +(j.dgain!=null?` · dgain <b>${j.dgain}</b>`:'')
+      +(j.analog!=null?` · analog <b>${j.analog}</b>`:'');
+  }
+  const modeSel=$('dnmode'); if(modeSel)modeSel.value=j.mode;
+  const calSel=$('dncal');   if(calSel)calSel.value=j.calibrate;
+  const thr=$('dnthr'), thrVal=$('dnthrval'), wrap=$('dnmanualwrap');
+  if(thr){
+    if(j.analog_min!=null)thr.min=j.analog_min;
+    if(j.analog_max!=null)thr.max=j.analog_max;
+    thr.value=j.threshold||thr.min;
+    if(thrVal)thrVal.textContent=thr.value;
+  }
+  if(wrap)wrap.hidden=(j.calibrate!=='manual');
+}
+async function loadDaynight(){ paintDaynight(await dnApi('')); }
+async function setIrMode(mode){
+  const j=await dnApi('a=mode',{method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'v='+mode});
+  paintDaynight(j);
+}
+irBtn.onclick=()=>{
+  const cur=dnState?dnState.mode:'auto';
+  const next=IR_MODES[(IR_MODES.indexOf(cur)+1)%IR_MODES.length];
+  irBtn.textContent='IR: …'; setIrMode(next);
+};
+// Settings tab wiring (guarded — these ids only exist once the modal markup is parsed)
+if($('dnmode')) $('dnmode').onchange=()=>setIrMode($('dnmode').value);
+if($('dncal'))  $('dncal').onchange =()=>{ const w=$('dnmanualwrap'); if(w)w.hidden=($('dncal').value!=='manual'); };
+if($('dnthr'))  $('dnthr').oninput  =()=>{ const v=$('dnthrval'); if(v)v.textContent=$('dnthr').value; };
+if($('dnsave')) $('dnsave').onclick =async()=>{
+  const btn=$('dnsave'), was=btn.textContent, msg=$('dnmsg');
+  const cal=$('dncal').value;
+  let body='v='+cal;
+  if(cal==='manual')body+='&thr='+encodeURIComponent($('dnthr').value);
+  btn.disabled=true; btn.textContent='Applying…'; msg.className='note'; msg.textContent='';
+  const j=await dnApi('a=cal',{method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  btn.disabled=false; btn.textContent=was;
+  if(!j||!j.ok){ msg.className='note bad'; msg.textContent='Apply failed'+(j&&j.error?': '+j.error:''); return; }
+  msg.className='note ok'; msg.textContent='Saved.';
+  paintDaynight(j);
+};
+loadDaynight();   // initial paint of the top-bar IR button
 
 async function connect(){
   await disconnect();
